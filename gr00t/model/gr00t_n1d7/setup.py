@@ -87,6 +87,8 @@ class Gr00tN1d7Pipeline(ModelPipeline):
                 tune_projector=self.config.model.tune_projector,
                 tune_diffusion_model=self.config.model.tune_diffusion_model,
                 tune_vlln=self.config.model.tune_vlln,
+                action_horizon=self.model_config.action_horizon,
+                state_history_length=self.model_config.state_history_length,
                 state_dropout_prob=self.config.model.state_dropout_prob,
                 backbone_trainable_params_fp32=self.config.model.backbone_trainable_params_fp32,
                 load_bf16=self.config.model.load_bf16,
@@ -107,14 +109,36 @@ class Gr00tN1d7Pipeline(ModelPipeline):
 
             unexpected_keys = loading_info.get("unexpected_keys", [])
             mismatched_keys = loading_info.get("mismatched_keys", [])
+            allowed_mismatched_keys = {
+                "action_head.state_encoder.layer1.W",
+            }
+            intentionally_reinitialized_keys = [
+                key for key in mismatched_keys if key in allowed_mismatched_keys
+            ]
+            unexpected_mismatched_keys = [
+                key for key in mismatched_keys if key not in allowed_mismatched_keys
+            ]
             other_missing = [k for k in missing_keys if "mask_token" not in k]
             errors = []
             if other_missing:
                 errors.append(f"Missing keys ({len(other_missing)}): {other_missing}")
             if unexpected_keys:
                 errors.append(f"Unexpected keys ({len(unexpected_keys)}): {unexpected_keys}")
-            if mismatched_keys:
-                errors.append(f"Mismatched keys ({len(mismatched_keys)}): {mismatched_keys}")
+            if intentionally_reinitialized_keys:
+                logging.warning(
+                    "Intentionally reinitializing checkpoint parameters with expanded shapes: %s",
+                    intentionally_reinitialized_keys,
+                )
+                if not self.config.model.tune_projector:
+                    errors.append(
+                        "The expanded state encoder was reinitialized but --no-tune-projector "
+                        "would freeze it"
+                    )
+            if unexpected_mismatched_keys:
+                errors.append(
+                    "Unexpected mismatched keys "
+                    f"({len(unexpected_mismatched_keys)}): {unexpected_mismatched_keys}"
+                )
             if errors:
                 raise RuntimeError(
                     "Checkpoint weight mismatch for "

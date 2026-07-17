@@ -12,6 +12,8 @@ def test_finetune_config_accepts_local_backbone_path():
     )
 
     assert config.backbone_model_path == "/models/nvidia-Cosmos-Reason2-2B"
+    assert config.action_horizon == 50
+    assert config.state_history_length == 50
 
 
 def test_build_dataset_configs_supports_legacy_path_group():

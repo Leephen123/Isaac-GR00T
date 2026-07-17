@@ -73,6 +73,12 @@ class FinetuneConfig:
     tune_diffusion_model: bool = True
     """If True, fine-tune the diffusion-based action decoder (if present in the model)."""
 
+    action_horizon: int = 50
+    """Number of future action steps predicted by the action head."""
+
+    state_history_length: int = 50
+    """Number of historical state steps concatenated by the state encoder."""
+
     state_dropout_prob: float = 0.2
     """
     Dropout probability applied to state inputs for regularization during training.

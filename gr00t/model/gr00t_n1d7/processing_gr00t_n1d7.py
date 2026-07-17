@@ -736,7 +736,7 @@ class Gr00tN1d7Processor(BaseProcessor):
             normalized_states = self._reshape_unitree_g1_29dof_states(normalized_states)
         if embodiment_tag in (EmbodimentTag.UNITREE_G1_29DOF_HAND,):
             normalized_states = self._reshape_unitree_g1_29dof_hand_states(normalized_states)
-        
+
         normalized_states = torch.cat(
             [
                 normalized_states,

@@ -76,9 +76,11 @@ torchrun --nproc_per_node="${NUM_GPUS}" --master_port=29500 \
     --learning_rate 1e-4 \
     --global_batch_size "${GLOBAL_BATCH_SIZE}" \
     --dataloader_num_workers 6 \
+    --action_horizon 50 \
+    --state_history_length 50 \
     --use_wandb \
     --color_jitter_params brightness 0.3 contrast 0.4 saturation 0.5 hue 0.08 \
     --shortest-image-edge 256 \
     --crop-fraction 0.92 \
-    --random_rotation_angle 3 
+    --random_rotation_angle 3
 #     --tune_llm \
