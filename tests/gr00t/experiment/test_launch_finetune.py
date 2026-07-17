@@ -5,6 +5,15 @@ from gr00t.experiment.launch_finetune import build_dataset_configs
 import pytest
 
 
+def test_finetune_config_accepts_local_backbone_path():
+    config = FinetuneConfig(
+        base_model_path="model",
+        backbone_model_path="/models/nvidia-Cosmos-Reason2-2B",
+    )
+
+    assert config.backbone_model_path == "/models/nvidia-Cosmos-Reason2-2B"
+
+
 def test_build_dataset_configs_supports_legacy_path_group():
     config = FinetuneConfig(
         base_model_path="model",

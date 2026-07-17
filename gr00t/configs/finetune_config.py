@@ -33,6 +33,9 @@ class FinetuneConfig:
     base_model_path: str
     """Path to the pretrained base model checkpoint (e.g., Hugging Face model hub or local directory)."""
 
+    backbone_model_path: str = "nvidia/Cosmos-Reason2-2B"
+    """Hugging Face repo ID or local directory for the Qwen/Cosmos VLM backbone."""
+
     dataset_path: str | None = None
     """Legacy path to one dataset root, or an os.pathsep-separated group of roots."""
 
