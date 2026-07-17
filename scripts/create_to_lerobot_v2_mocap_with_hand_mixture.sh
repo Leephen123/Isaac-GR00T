@@ -62,6 +62,7 @@ export CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7
 torchrun --nproc_per_node="${NUM_GPUS}" --master_port=29500 \
     gr00t/experiment/launch_finetune.py \
     --base-model-path /liujinxin/liyifan/gr00tN1.7/Isaac-GR00T/checkpoints/nvidia-GR00T-N1.7-3B \
+    --backbone_model_path /liujinxin/liyifan/gr00tN1.7/Isaac-GR00T/checkpoints/nvidia-Cosmos-Reason2-2B \
     --dataset-path-groups "${DATASET_PATH_5}" \
     --dataset_embodiment_tags "${EMBODIMENT_TAG_3}" \
     --dataset_mix_ratios "1" \
