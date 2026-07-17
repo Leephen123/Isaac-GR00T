@@ -1,0 +1,89 @@
+robot: "sber"
+xml: "{EI_ROOT_DIR}/resources/robots/sberbank/green_27dof_urdf/scene_sber.xml"
+DT: 0.02
+
+msg_type: "hg"     # "hg" or "go"
+imu_type: "pelvis"    # "torso" or "pelvis"
+
+lowcmd_topic: "rt/lowcmd"
+lowstate_topic: "rt/lowstate"
+
+actor_path: "{EI_ROOT_DIR}/actor/actor.pt"
+motion_file: "{EI_ROOT_DIR}/sample_data/fly_ws/"
+ 
+kps: [
+      200, 200, 100, 350, 70, 70,
+      200, 200, 100, 350, 70, 70,
+      70,
+      30, 30, 20, 20, 20, 5, 5,
+      30, 30, 20, 20, 20, 5, 5
+]
+kds: [
+      5, 5, 5, 5, 4, 4, 
+      5, 5, 5, 5, 4, 4, 
+      4,
+      1.5, 1.5, 1.0, 1.0, 1.0, 0.08, 0.08,
+      1.5, 1.5, 1.0, 1.0, 1.0, 0.08, 0.08
+]
+
+effort_limit: []
+default_joint_pos: [
+        -0.1, 0.0, 0.0, 0.3, -0.2, 0.0, 
+        -0.1, 0.0, 0.0, 0.3, -0.2, 0.0,
+        0.0,
+        0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
+        0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0
+    ]
+
+hands: 
+    box: 
+        kps: 
+            left: []
+            right: []
+        kds: 
+            left: []
+            right: []
+    dex3: 
+        kps: 
+            left: [1.5, 1.5, 1.5, 1.5, 1.5, 1.5, 1.5]
+            right: [1.5, 1.5, 1.5, 1.5, 1.5, 1.5, 1.5]
+        kds: 
+            left: [0.2, 0.2, 0.2, 0.2, 0.2, 0.2, 0.2]
+            right: [0.2, 0.2, 0.2, 0.2, 0.2, 0.2, 0.2]
+
+        left_lowcmd_topic: "rt/dex3/left/cmd"
+        left_lowstate_topic: "rt/dex3/left/state"
+
+        right_lowcmd_topic: "rt/dex3/right/cmd"
+        right_lowstate_topic: "rt/dex3/right/state"
+
+num_actions: 27
+action_scale: 0.25
+
+obs_scale_projected_gravity_b: 1.0
+obs_scale_root_ang_vel_b: 0.25
+obs_scale_joint_pos: 1.0
+obs_scale_joint_vel: 0.05
+obs_scale_action: 0.25
+obs_scale_cmd: [2.0, 2.0, 0.25]
+
+max_cmd: [0.8, 0.5, 1.57]
+
+actor_joint_names: [
+  'left_hip_pitch_joint', 'right_hip_pitch_joint', 'waist_yaw_joint',
+  'left_hip_roll_joint', 'right_hip_roll_joint', 'left_shoulder_pitch_joint', 'right_shoulder_pitch_joint',
+  'left_hip_yaw_joint', 'right_hip_yaw_joint', 'left_shoulder_roll_joint', 'right_shoulder_roll_joint',
+  'left_knee_pitch_joint', 'right_knee_pitch_joint', 'left_shoulder_yaw_joint', 'right_shoulder_yaw_joint',
+  'left_ankle_pitch_joint', 'right_ankle_pitch_joint', 'left_elbow_pitch_joint', 'right_elbow_pitch_joint',
+  'left_ankle_roll_joint', 'right_ankle_roll_joint', 'left_elbow_yaw_joint', 'right_elbow_yaw_joint',
+  'left_wrist_roll_joint', 'right_wrist_roll_joint',
+  'left_wrist_pitch_joint', 'right_wrist_pitch_joint'
+]
+
+env_joint_names: [
+  'left_hip_pitch_joint', 'left_hip_roll_joint', 'left_hip_yaw_joint', 'left_knee_pitch_joint', 'left_ankle_pitch_joint', 'left_ankle_roll_joint',
+  'right_hip_pitch_joint', 'right_hip_roll_joint', 'right_hip_yaw_joint', 'right_knee_pitch_joint', 'right_ankle_pitch_joint', 'right_ankle_roll_joint',
+  'waist_yaw_joint',
+  'left_shoulder_pitch_joint', 'left_shoulder_roll_joint', 'left_shoulder_yaw_joint', 'left_elbow_pitch_joint', 'left_elbow_yaw_joint', 'left_wrist_roll_joint', 'left_wrist_pitch_joint',
+    'right_shoulder_pitch_joint', 'right_shoulder_roll_joint', 'right_shoulder_yaw_joint', 'right_elbow_pitch_joint', 'right_elbow_yaw_joint', 'right_wrist_roll_joint', 'right_wrist_pitch_joint'
+]

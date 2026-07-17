@@ -1,0 +1,95 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "wr"
+version = "0.1.0"
+description = "Robot data collection, motion capture, and simulation utilities."
+requires-python = ">=3.10"
+dependencies = [
+    "cyclonedds",
+    "loop-rate-limiters",
+    "matplotlib",
+    "numpy",
+    "opencv-python",
+    "pandas",
+    "pillow",
+    "pyyaml",
+    "scipy",
+    "tyro",
+]
+
+[project.optional-dependencies]
+data-res = [
+    "cyclonedds",
+    "numpy",
+    "opencv-python",
+    "pillow",
+    "pyyaml",
+    "scipy",
+]
+scripts = [
+    "cyclonedds",
+    "loop-rate-limiters",
+    "matplotlib",
+    "numpy",
+    "opencv-python",
+    "pandas",
+    "pillow",
+    "pyyaml",
+    "scipy",
+    "tyro",
+]
+analysis = [
+    "matplotlib",
+    "pandas",
+    "seaborn",
+]
+inference = [
+    "cyclonedds",
+    "loop-rate-limiters",
+    "tyro",
+]
+sim = [
+    "cyclonedds",
+    "imageio",
+    "loop-rate-limiters",
+    "mujoco",
+    "pygame",
+    "pynput",
+    "torch",
+    "tqdm",
+    "tyro",
+]
+all = [
+    "cyclonedds",
+    "imageio",
+    "loop-rate-limiters",
+    "matplotlib",
+    "mujoco",
+    "numpy",
+    "opencv-python",
+    "pandas",
+    "pillow",
+    "pygame",
+    "pynput",
+    "pyyaml",
+    "scipy",
+    "seaborn",
+    "torch",
+    "tqdm",
+    "tyro",
+]
+
+[tool.wr.external-dependencies]
+notes = [
+    "unitree_sdk2py is vendored under sim_res/mujoco/unitree_sdk2py for some scripts, while scripts/collect_data.py also inserts /home/unitree/unitree_sdk2_python at runtime.",
+    "teleop is imported by scripts/collect_data.py from /home/unitree/xr_teleoperate and must be installed or available on that path.",
+    "westlake_sdkpy appears to be a non-PyPI/vendor SDK used by sim_res/mujoco/eman/sim2/*_env.py.",
+    "sim_res/mujoco/eman still references a tasks package that is not present in this repository.",
+    "System tools and native libraries are still required for hardware workflows, including v4l2-ctl, camera devices under /dev/video*, CycloneDDS runtime support, and robot network access.",
+]
+
+[tool.setuptools.packages.find]
+include = ["data_res*", "sim_res*", "serve_res*"]

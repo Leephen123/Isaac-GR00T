@@ -1,0 +1,47 @@
+# C++
+**/cmake-build*/
+**/build*/
+**/*.so
+**/*.log*
+
+# Omniverse
+**/*.dmp
+**/.thumbs
+
+## No USD files allowed in the repo
+#**/*.usd
+#**/*.usda
+#**/*.usdc
+#**/*.usdz
+
+# Python
+.DS_Store
+**/*.egg-info/
+**/__pycache__/
+**/.pytest_cache/
+**/*.pyc
+**/*.pb
+
+# Docker/Singularity
+**/*.sif
+docker/cluster/exports/
+docker/.container.cfg
+
+# IDE
+**/.idea/
+**/.vscode/
+
+tmp
+data_collect/receive_state_only copy.py
+data_collect/data_collect_json_fps_latest copy.py
+data_collect/data_collect_json_v1_mini.py
+data_collect/data_collect_json_fps_latest.py
+
+data/
+standalized_data/
+G1_infer/mujoco/resources/
+create_to_lerobot_v2_mocap.py
+
+# Local test scripts and scratch files
+test
+todo.bak

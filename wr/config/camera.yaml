@@ -1,0 +1,36 @@
+# 全局设置
+fps: 20
+
+cameras:
+  left_hand:
+    path: /dev/v4l/by-path/platform-3610000.xhci-usb-0:2.3.2:1.0-video-index0
+    width: 320
+    height: 240
+    v4l2_controls:
+      white_balance_automatic: 0
+      white_balance_temperature: 5500
+      auto_exposure: 1
+      exposure_time_absolute: 120
+      gain: 0
+
+  front_head:
+    path: /dev/v4l/by-path/platform-3610000.xhci-usb-0:3:1.3-video-index0
+    width: 424
+    height: 240
+    v4l2_controls:
+      white_balance_automatic: 0
+      white_balance_temperature: 5500
+      auto_exposure: 1
+      exposure_time_absolute: 120
+      gain: 0
+
+  right_hand:
+    path: /dev/v4l/by-path/platform-3610000.xhci-usb-0:2.1.4:1.0-video-index0
+    width: 320
+    height: 240
+    v4l2_controls:
+      white_balance_automatic: 0
+      white_balance_temperature: 5500
+      auto_exposure: 1
+      exposure_time_absolute: 120
+      gain: 0

@@ -1,0 +1,5 @@
+mjmodel.mjb
+MJMODEL.TXT
+__pycache__/
+*.pyc
+*.log
