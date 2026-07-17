@@ -468,9 +468,7 @@ class ShardedMixtureDataset(IterableDataset):
             self.curr_shard_index + 1
         ]
         # Submit background loading job
-        self._cache_job = self._executor.submit(
-            self._load_shard, next_dataset_idx, next_shard_idx
-        )
+        self._cache_job = self._executor.submit(self._load_shard, next_dataset_idx, next_shard_idx)
 
     def _load_shard(self, dataset_idx: int, shard_idx: int) -> tuple[list, float]:
         load_start = time.perf_counter()

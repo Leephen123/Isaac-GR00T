@@ -32,8 +32,8 @@ from gr00t.configs.data.embodiment_configs import (
     ActionType,
     ModalityConfig,
 )
-from gr00t.data.state_action.action_chunking import EndEffectorActionChunk, JointActionChunk
 from gr00t.data.embodiment_tags import EmbodimentTag
+from gr00t.data.state_action.action_chunking import EndEffectorActionChunk, JointActionChunk
 from gr00t.data.state_action.pose import EndEffectorPose, JointPose
 from gr00t.data.utils import (
     apply_sin_cos_encoding,
@@ -223,13 +223,9 @@ class StateActionProcessor:
                 - Other groups: (..., D)
         """
         unnormalized_imu = None
-        if embodiment_tag in (
-            EmbodimentTag.UNITREE_G1_29DOF.value,
-        ):
+        if embodiment_tag in (EmbodimentTag.UNITREE_G1_29DOF.value,):
             unnormalized_imu = state["imu_joints"].reshape(-1, 35)[:, :6].copy()
-        if embodiment_tag in (
-            EmbodimentTag.UNITREE_G1_29DOF_HAND.value, EmbodimentTag.UNITREE_G1_29DOF_HAND_SINGLE_VIEW.value
-        ):
+        if embodiment_tag == EmbodimentTag.UNITREE_G1_29DOF_HAND.value:
             unnormalized_imu = state["imu_joints"].reshape(-1, 47)[:, :6].copy()
         normalized_values = {}
         state = deepcopy(state)  # Avoid modifying input
@@ -280,7 +276,7 @@ class StateActionProcessor:
                 imu_joints = normalized_values["imu_joints"].reshape(-1, 35)
                 imu_joints[:, :6] = unnormalized_imu
                 normalized_values["imu_joints"] = imu_joints.reshape(imu_joints_shape)
-            if embodiment_tag in (EmbodimentTag.UNITREE_G1_29DOF_HAND.value, EmbodimentTag.UNITREE_G1_29DOF_HAND_SINGLE_VIEW.value):
+            if embodiment_tag == EmbodimentTag.UNITREE_G1_29DOF_HAND.value:
                 imu_joints_shape = normalized_values["imu_joints"].shape
                 imu_joints = normalized_values["imu_joints"].reshape(-1, 47)
                 imu_joints[:, :6] = unnormalized_imu
@@ -380,14 +376,10 @@ class StateActionProcessor:
             ValueError: If state is None but required for relative action conversion
         """
         unnormalized_xyz_tail = None
-        if embodiment_tag in (
-            EmbodimentTag.UNITREE_G1_29DOF.value,
-        ):
+        if embodiment_tag in (EmbodimentTag.UNITREE_G1_29DOF.value,):
             unnormalized_xyz_tail = action["mocap"].reshape(-1, 102)[:, 36:].copy()
-        if embodiment_tag in (
-            EmbodimentTag.UNITREE_G1_29DOF_HAND.value, EmbodimentTag.UNITREE_G1_29DOF_HAND_SINGLE_VIEW.value
-        ):
-            unnormalized_xyz_tail = action["mocap"].reshape(-1, 114)[:, 36: 102].copy()
+        if embodiment_tag == EmbodimentTag.UNITREE_G1_29DOF_HAND.value:
+            unnormalized_xyz_tail = action["mocap"].reshape(-1, 114)[:, 36:102].copy()
         action = deepcopy(action)  # Avoid modifying input
 
         # Step 1: Convert absolute actions to relative (if needed)
@@ -451,7 +443,7 @@ class StateActionProcessor:
             mocap = normalized_values["mocap"].reshape(-1, 102)
             mocap[:, 36:] = unnormalized_xyz_tail
             normalized_values["mocap"] = mocap.reshape(mocap_shape)
-        if embodiment_tag in (EmbodimentTag.UNITREE_G1_29DOF_HAND.value, EmbodimentTag.UNITREE_G1_29DOF_HAND_SINGLE_VIEW.value):
+        if embodiment_tag == EmbodimentTag.UNITREE_G1_29DOF_HAND.value:
             mocap_shape = normalized_values["mocap"].shape
             mocap = normalized_values["mocap"].reshape(-1, 114)
             mocap[:, 36:102] = unnormalized_xyz_tail
@@ -487,13 +479,9 @@ class StateActionProcessor:
             ValueError: If state is None but required for relative->absolute conversion
         """
         raw_mocap_tail = None
-        if embodiment_tag in (
-            EmbodimentTag.UNITREE_G1_29DOF.value,
-        ):
+        if embodiment_tag in (EmbodimentTag.UNITREE_G1_29DOF.value,):
             raw_mocap_tail = action["mocap"].reshape(-1, 102)[:, 36:].copy()
-        if embodiment_tag in (
-            EmbodimentTag.UNITREE_G1_29DOF_HAND.value, EmbodimentTag.UNITREE_G1_29DOF_HAND_SINGLE_VIEW.value
-        ):
+        if embodiment_tag == EmbodimentTag.UNITREE_G1_29DOF_HAND.value:
             raw_mocap_tail = action["mocap"].reshape(-1, 114)[:, 36:102].copy()
         # Step 1: Unnormalize actions
         unnormalized_values = {}
@@ -524,7 +512,7 @@ class StateActionProcessor:
             mocap = unnormalized_values["mocap"].reshape(-1, 102)
             mocap[:, 36:] = raw_mocap_tail
             unnormalized_values["mocap"] = mocap.reshape(mocap_shape)
-        if embodiment_tag in (EmbodimentTag.UNITREE_G1_29DOF_HAND.value, EmbodimentTag.UNITREE_G1_29DOF_HAND_SINGLE_VIEW.value):
+        if embodiment_tag == EmbodimentTag.UNITREE_G1_29DOF_HAND.value:
             mocap_shape = unnormalized_values["mocap"].shape
             mocap = unnormalized_values["mocap"].reshape(-1, 114)
             mocap[:, 36:102] = raw_mocap_tail

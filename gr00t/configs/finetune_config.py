@@ -33,11 +33,23 @@ class FinetuneConfig:
     base_model_path: str
     """Path to the pretrained base model checkpoint (e.g., Hugging Face model hub or local directory)."""
 
-    dataset_path: str
-    """Path to one dataset root, or an os.pathsep-separated list of dataset roots."""
+    dataset_path: str | None = None
+    """Legacy path to one dataset root, or an os.pathsep-separated group of roots."""
 
-    embodiment_tag: str
+    embodiment_tag: str | None = None
     """Embodiment tag (name or value, case-insensitive). See EmbodimentTag for known tags."""
+
+    dataset_paths: list[str] | None = None
+    """Dataset roots to train as independently weighted datasets."""
+
+    dataset_path_groups: list[str] | None = None
+    """Comma-separated path groups to train as independently weighted datasets."""
+
+    dataset_mix_ratios: list[float] | None = None
+    """Optional sampling ratio for each dataset or dataset group."""
+
+    dataset_embodiment_tags: list[str] | None = None
+    """Optional embodiment tag for each dataset or dataset group."""
 
     modality_config_path: str | None = None
     """

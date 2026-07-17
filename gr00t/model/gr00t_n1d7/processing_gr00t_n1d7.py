@@ -88,12 +88,16 @@ _PROJECTOR_INDEX_GROUPS: dict[int, set[str]] = {
         "real_r1_pro_sharpa_relative_eef_maxinsights",
         "real_r1_pro_sharpa_relative_eef_mecka",
     },
-    # xdof base + subtask refinement.
     12: {
         "unitree_g1_29dof",
     },
     13: {
         "unitree_g1_29dof_hand",
+    },
+    # XDOF base + subtask refinement use the pretrained projector slot.
+    27: {
+        "xdof_relative_eef_relative_joint",
+        "xdof_relative_eef_relative_joint_subtask",
     },
 }
 

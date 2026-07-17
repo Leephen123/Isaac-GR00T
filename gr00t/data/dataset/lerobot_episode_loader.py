@@ -437,8 +437,7 @@ class LeRobotEpisodeLoader:
             video_data[image_key] = get_frames_by_indices(
                 str(video_path),
                 indices,
-                video_backend=self.video_backend,
-                video_backend_kwargs=self.video_backend_kwargs or {},
+                decoder_kwargs=self.decoder_kwargs or {},
             )
 
         return video_data
@@ -559,9 +558,7 @@ class LeRobotEpisodeLoader:
         return new_languages
 
     @staticmethod
-    def _normalize_requested_indices(
-        indices: np.ndarray | None, episode_length: int
-    ) -> np.ndarray:
+    def _normalize_requested_indices(indices: np.ndarray | None, episode_length: int) -> np.ndarray:
         if indices is None:
             return np.arange(episode_length)
 
@@ -585,8 +582,7 @@ class LeRobotEpisodeLoader:
         """Add decoded data at selected rows without materializing unused frames."""
         for key, values in data.items():
             assert len(values) == len(indices), (
-                f"{prefix} data for {key} has length {len(values)}, "
-                f"expected {len(indices)}"
+                f"{prefix} data for {key} has length {len(values)}, expected {len(indices)}"
             )
             indexed_values = [None] * len(df)
             for row_index, value in zip(indices, values):

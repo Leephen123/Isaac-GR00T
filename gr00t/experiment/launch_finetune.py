@@ -24,6 +24,7 @@ import tyro
 
 from gr00t.configs.base_config import get_default_config
 from gr00t.configs.finetune_config import FinetuneConfig
+from gr00t.data.embodiment_tags import EmbodimentTag
 from gr00t.experiment.experiment import run
 
 
@@ -67,27 +68,41 @@ def get_mix_ratios(ft_config: FinetuneConfig, expected_len: int, flag_name: str)
 def get_embodiment_tags(ft_config: FinetuneConfig, expected_len: int, flag_name: str) -> list[str]:
     if ft_config.dataset_embodiment_tags is None:
         if ft_config.embodiment_tag is None:
-            raise ValueError("Either --embodiment-tag or --dataset-embodiment-tags must be provided")
-        return [ft_config.embodiment_tag.value] * expected_len
+            raise ValueError(
+                "Either --embodiment-tag or --dataset-embodiment-tags must be provided"
+            )
+        return [EmbodimentTag.resolve(ft_config.embodiment_tag).value] * expected_len
 
     if len(ft_config.dataset_embodiment_tags) != expected_len:
         raise ValueError(
             "--dataset-embodiment-tags must have the same length as "
             f"{flag_name} ({len(ft_config.dataset_embodiment_tags)} != {expected_len})"
         )
-    return [tag.value for tag in ft_config.dataset_embodiment_tags]
+    return [EmbodimentTag.resolve(tag).value for tag in ft_config.dataset_embodiment_tags]
 
 
 def build_dataset_configs(ft_config: FinetuneConfig) -> list[dict]:
     """Build data.datasets config for single-dataset or multi-dataset finetuning."""
+    configured_modes = sum(
+        value is not None
+        for value in (
+            ft_config.dataset_path,
+            ft_config.dataset_paths,
+            ft_config.dataset_path_groups,
+        )
+    )
+    if configured_modes != 1:
+        raise ValueError(
+            "Exactly one of --dataset-path, --dataset-paths, or "
+            "--dataset-path-groups must be provided"
+        )
+
     if ft_config.dataset_path_groups is not None:
         if len(ft_config.dataset_path_groups) == 0:
             raise ValueError("--dataset-path-groups must contain at least one dataset group")
 
         dataset_path_groups = parse_dataset_path_groups(ft_config.dataset_path_groups)
-        mix_ratios = get_mix_ratios(
-            ft_config, len(dataset_path_groups), "--dataset-path-groups"
-        )
+        mix_ratios = get_mix_ratios(ft_config, len(dataset_path_groups), "--dataset-path-groups")
         embodiment_tags = get_embodiment_tags(
             ft_config, len(dataset_path_groups), "--dataset-path-groups"
         )
@@ -130,8 +145,7 @@ def build_dataset_configs(ft_config: FinetuneConfig) -> list[dict]:
 
     if ft_config.dataset_mix_ratios is not None:
         raise ValueError(
-            "--dataset-mix-ratios can only be used with "
-            "--dataset-paths or --dataset-path-groups"
+            "--dataset-mix-ratios can only be used with --dataset-paths or --dataset-path-groups"
         )
 
     if ft_config.dataset_embodiment_tags is not None:
@@ -143,14 +157,17 @@ def build_dataset_configs(ft_config: FinetuneConfig) -> list[dict]:
     if ft_config.embodiment_tag is None:
         raise ValueError("--embodiment-tag must be provided when using --dataset-path")
 
+    legacy_paths = [path for path in ft_config.dataset_path.split(os.pathsep) if path]
+    if not legacy_paths:
+        raise ValueError("--dataset-path must contain at least one dataset path")
+
     return [
         {
-            "dataset_paths": [ft_config.dataset_path],
+            "dataset_paths": legacy_paths,
             "mix_ratio": 1.0,
-            "embodiment_tag": ft_config.embodiment_tag.value,
+            "embodiment_tag": EmbodimentTag.resolve(ft_config.embodiment_tag).value,
         }
     ]
-
 
 
 if __name__ == "__main__":
@@ -159,16 +176,12 @@ if __name__ == "__main__":
         os.environ["LOGURU_LEVEL"] = "INFO"
     # Use tyro for clean CLI
     ft_config = tyro.cli(FinetuneConfig, description=__doc__)
-    from gr00t.data.embodiment_tags import EmbodimentTag
-
-    ft_config.embodiment_tag = EmbodimentTag.resolve(ft_config.embodiment_tag)
-    embodiment_tag = ft_config.embodiment_tag.value
+    if ft_config.embodiment_tag is not None:
+        ft_config.embodiment_tag = EmbodimentTag.resolve(ft_config.embodiment_tag).value
 
     # all rank workers should register for the modality config
     if ft_config.modality_config_path is not None:
         load_modality_config(ft_config.modality_config_path)
-
-    dataset_paths = [path for path in ft_config.dataset_path.split(os.pathsep) if path]
 
     config = get_default_config().load_dict(
         {

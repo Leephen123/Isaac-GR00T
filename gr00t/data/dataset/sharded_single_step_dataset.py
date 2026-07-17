@@ -1,5 +1,4 @@
 from pathlib import Path
-from typing import Any
 
 import numpy as np
 import pandas as pd
@@ -203,15 +202,13 @@ class ShardedSingleStepDataset(ShardedDataset):
             if len(step_indices) == 0:
                 continue
             splits_for_shard_size = int(np.ceil(len(step_indices) / self.shard_size))
-            episode_num_splits = min(
-                max(num_splits, splits_for_shard_size), len(step_indices)
-            )
+            episode_num_splits = min(max(num_splits, splits_for_shard_size), len(step_indices))
             episode_splits = np.array_split(step_indices, episode_num_splits)
             for split_step_indices in episode_splits:
                 # Assign to shard with minimum current length (greedy balancing)
                 shard_index = np.argmin(shard_lengths)
-            sharded_episodes[shard_index].append((ep_idx, split_step_indices))
-            shard_lengths[shard_index] += len(split_step_indices)
+                sharded_episodes[shard_index].append((ep_idx, split_step_indices))
+                shard_lengths[shard_index] += len(split_step_indices)
 
         # Validate shard creation
         assert all(shard_lengths[i] > 0 for i in range(num_shards)), (
@@ -300,9 +297,7 @@ class ShardedSingleStepDataset(ShardedDataset):
             # A shard normally contains only a fraction of an episode. Decode the
             # image-like modalities needed by those steps instead of the full video.
             episode_length = self.episode_loader.get_episode_length(ep_idx)
-            video_indices = self._get_required_indices(
-                step_indices, "video", episode_length
-            )
+            video_indices = self._get_required_indices(step_indices, "video", episode_length)
             mask_indices = self._get_required_indices(step_indices, "mask", episode_length)
             episode_data = self.episode_loader.get_episode(
                 ep_idx,

@@ -136,6 +136,8 @@ class TestTagCategories:
         assert EmbodimentTag.NEW_EMBODIMENT in FINETUNE_ONLY_TAGS
         assert EmbodimentTag.ROBOCASA_PANDA_OMRON in FINETUNE_ONLY_TAGS
         assert EmbodimentTag.ROBOCASA_GR1_TABLETOP in FINETUNE_ONLY_TAGS
+        assert EmbodimentTag.UNITREE_G1_29DOF in FINETUNE_ONLY_TAGS
+        assert EmbodimentTag.UNITREE_G1_29DOF_HAND in FINETUNE_ONLY_TAGS
 
     def test_pretrain_tags_match_base_model(self):
         """Pretrain tags should match what's in the base model checkpoint."""
