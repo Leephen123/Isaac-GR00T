@@ -78,7 +78,7 @@ class Gr00tN1d7Config(PretrainedConfig):
     input_embedding_dim: int = 1536
 
     # State history: number of consecutive state timesteps fed to the state encoder
-    state_history_length: int = 1
+    state_history_length: int = 50
 
     # Global parameters
     add_pos_embed: bool = True

@@ -401,7 +401,7 @@ class Gr00tN1d7Processor(BaseProcessor):
             if embodiment_tag == EmbodimentTag.UNITREE_G1_29DOF:
                 action_horizon = 50
                 joint_dim = 102
-            elif embodiment_tag in (EmbodimentTag.UNITREE_G1_29DOF_HAND):
+            elif embodiment_tag in (EmbodimentTag.UNITREE_G1_29DOF_HAND,):
                 action_horizon = 50
                 joint_dim = 114
             else:
@@ -412,7 +412,7 @@ class Gr00tN1d7Processor(BaseProcessor):
             sliced_action = action[..., :action_horizon, start_idx : start_idx + joint_dim]
             if embodiment_tag == EmbodimentTag.UNITREE_G1_29DOF:
                 sliced_action = sliced_action.reshape(sliced_action.shape[0], 1, -1)
-            if embodiment_tag in (EmbodimentTag.UNITREE_G1_29DOF_HAND):
+            if embodiment_tag in (EmbodimentTag.UNITREE_G1_29DOF_HAND,):
                 sliced_action = sliced_action.reshape(sliced_action.shape[0], 1, -1)
 
             out_dict[key] = sliced_action
@@ -674,7 +674,7 @@ class Gr00tN1d7Processor(BaseProcessor):
             )  # (t, d)
             if embodiment_tag == EmbodimentTag.UNITREE_G1_29DOF:
                 normalized_actions = self._reshape_unitree_g1_29dof_actions(normalized_actions)
-            if embodiment_tag in (EmbodimentTag.UNITREE_G1_29DOF_HAND):
+            if embodiment_tag in (EmbodimentTag.UNITREE_G1_29DOF_HAND,):
                 normalized_actions = self._reshape_unitree_g1_29dof_hand_actions(normalized_actions)
             action_dim = normalized_actions.shape[1]
             # Pad action to max_action_dim
@@ -734,7 +734,7 @@ class Gr00tN1d7Processor(BaseProcessor):
 
         if embodiment_tag == EmbodimentTag.UNITREE_G1_29DOF:
             normalized_states = self._reshape_unitree_g1_29dof_states(normalized_states)
-        if embodiment_tag in (EmbodimentTag.UNITREE_G1_29DOF_HAND):
+        if embodiment_tag in (EmbodimentTag.UNITREE_G1_29DOF_HAND,):
             normalized_states = self._reshape_unitree_g1_29dof_hand_states(normalized_states)
         
         normalized_states = torch.cat(

@@ -92,6 +92,7 @@ class Gr00tN1d7Pipeline(ModelPipeline):
                 load_bf16=self.config.model.load_bf16,
                 transformers_loading_kwargs=self.transformers_loading_kwargs,
                 output_loading_info=True,
+                ignore_mismatched_sizes=True,
                 **self.transformers_loading_kwargs,
             )
 

@@ -80,6 +80,5 @@ torchrun --nproc_per_node="${NUM_GPUS}" --master_port=29500 \
     --color_jitter_params brightness 0.3 contrast 0.4 saturation 0.5 hue 0.08 \
     --shortest-image-edge 256 \
     --crop-fraction 0.92 \
-    --random_rotation_angle 3 \
-    --state_dropout_prob 0.1 
+    --random_rotation_angle 3 
 #     --tune_llm \
