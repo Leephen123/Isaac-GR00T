@@ -99,7 +99,8 @@ ipython_config.py
 __pypackages__/
 
 # IDEs
-.vscode/
+.vscode/*
+!.vscode/launch.json
 .idea/
 .cursor/
 .cursor*
