@@ -1,19 +1,5 @@
-# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
-# SPDX-License-Identifier: Apache-2.0
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-# http://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
-
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 import pandas as pd
@@ -142,6 +128,10 @@ class ShardedSingleStepDataset(ShardedDataset):
         self.modality_configs = modality_configs
         self.shard_size = shard_size
         self.episode_sampling_rate = episode_sampling_rate
+        if not 0 < self.episode_sampling_rate <= 1:
+            raise ValueError(
+                f"episode_sampling_rate must be in (0, 1], got {self.episode_sampling_rate}"
+            )
         self.seed = seed
         self.allow_padding = allow_padding
         self.processor = None
@@ -173,7 +163,7 @@ class ShardedSingleStepDataset(ShardedDataset):
         - Reproducible sharding based on seed
         """
         shuffled_episode_indices = self.rng.permutation(len(self.episode_loader.episode_lengths))
-        num_splits = int(1 / self.episode_sampling_rate)
+        num_splits = max(1, int(1 / self.episode_sampling_rate))
 
         assert len(shuffled_episode_indices) > 0, (
             f"No valid trajectories found for dataset {self.dataset_path}"
@@ -206,14 +196,19 @@ class ShardedSingleStepDataset(ShardedDataset):
         shard_lengths = np.zeros(num_shards, dtype=int)
 
         # Distribute episode sub-sequences across shards
-        # First pass: ensure each shard gets at least one episode_split (round-robin)
-        # This guarantees no shard is empty when num_shards <= len(episode_splits)
-        for i, (ep_idx, split_step_indices) in enumerate(episode_splits):
-            if i < num_shards:
-                # First num_shards items: one per shard (guarantees non-empty)
-                shard_index = i
-            else:
-                # Remaining items: assign to shard with minimum current length (greedy balancing)
+        for ep_idx in shuffled_episode_indices:
+            # Keep each subsection contiguous so video decoders can read locally.
+            # Samples are shuffled later by ShardedMixtureDataset before yielding.
+            step_indices = np.arange(0, self.get_effective_episode_length(ep_idx))
+            if len(step_indices) == 0:
+                continue
+            splits_for_shard_size = int(np.ceil(len(step_indices) / self.shard_size))
+            episode_num_splits = min(
+                max(num_splits, splits_for_shard_size), len(step_indices)
+            )
+            episode_splits = np.array_split(step_indices, episode_num_splits)
+            for split_step_indices in episode_splits:
+                # Assign to shard with minimum current length (greedy balancing)
                 shard_index = np.argmin(shard_lengths)
             sharded_episodes[shard_index].append((ep_idx, split_step_indices))
             shard_lengths[shard_index] += len(split_step_indices)
@@ -272,6 +267,20 @@ class ShardedSingleStepDataset(ShardedDataset):
         """Get the number of timesteps in a specific shard."""
         return self.shard_lengths[idx]
 
+    def _get_required_indices(
+        self, step_indices: np.ndarray, modality: str, episode_length: int
+    ) -> np.ndarray | None:
+        if modality not in self.modality_configs:
+            return None
+
+        delta_indices = np.asarray(self.modality_configs[modality].delta_indices, dtype=np.int64)
+        required_indices = (
+            np.asarray(step_indices, dtype=np.int64)[:, None] + delta_indices[None, :]
+        ).reshape(-1)
+        if self.allow_padding:
+            required_indices = np.clip(required_indices, 0, episode_length - 1)
+        return np.unique(required_indices)
+
     def get_shard(self, idx: int) -> list:
         """
         Load and process all timesteps in a specific shard.
@@ -288,8 +297,18 @@ class ShardedSingleStepDataset(ShardedDataset):
         episodes = self.sharded_episodes[idx]
         datapoints = []
         for ep_idx, step_indices in episodes:
-            # Load episode data once per episode in shard
-            episode_data = self.episode_loader[ep_idx]
+            # A shard normally contains only a fraction of an episode. Decode the
+            # image-like modalities needed by those steps instead of the full video.
+            episode_length = self.episode_loader.get_episode_length(ep_idx)
+            video_indices = self._get_required_indices(
+                step_indices, "video", episode_length
+            )
+            mask_indices = self._get_required_indices(step_indices, "mask", episode_length)
+            episode_data = self.episode_loader.get_episode(
+                ep_idx,
+                video_indices=video_indices,
+                mask_indices=mask_indices,
+            )
             for step_index in step_indices:
                 datapoints.append(self.get_datapoint(episode_data, step_index))
         return datapoints

@@ -75,20 +75,13 @@ def merge_statistics(
     # Initialize overall statistics dict
     overall_stats: dict[str, dict[str, list[float]]] = {}
 
-    # Process each modality (e.g., "state", "action"). An entry is a real
-    # stats group iff it carries a "mean" field; anything else is sidecar
-    # metadata that producers may co-locate at the top level (e.g. the
-    # __fingerprints__ cache map written by generate_rel_stats) and must be
-    # skipped rather than merged. Structural duck-typing keeps this consumer
-    # decoupled from whatever sidecar names the producer adopts.
-    for modality, modality_stats in per_dataset_stats[0].items():
-        if not isinstance(modality_stats, dict) or "mean" not in modality_stats:
-            continue
+    # Process each modality (e.g., "state", "action")
+    for modality in per_dataset_stats[0]:
         # Get dimensionality from first dataset (assumed consistent)
         dim = (
-            [len(modality_stats["mean"])]
+            [len(per_dataset_stats[0][modality]["mean"])]
             if not is_relative_stats
-            else np.array(modality_stats["mean"]).shape
+            else np.array(per_dataset_stats[0][modality]["mean"]).shape
         )
 
         # Initialize accumulators for weighted mean and variance computation
@@ -257,6 +250,7 @@ class ShardedMixtureDataset(IterableDataset):
         self._cache_job: Future | None = None
 
         self._assert_seed_rank_symmetric(self.seed)
+        self._last_shard_load_time = 0.0
 
     def merge_statistics(self):
         """
@@ -433,8 +427,12 @@ class ShardedMixtureDataset(IterableDataset):
             wait_end = time.time()
 
             dataset_index, shard_index = self.worker_shard_sampling_schedule[self.curr_shard_index]
+            dataset_path = getattr(self.datasets[dataset_index], "dataset_path", "unknown")
             print(
-                f"Rank {self.rank}, Worker {self.worker_id}: Wait for shard {shard_index} in dataset {dataset_index} in {wait_end - wait_start:.2f} seconds"
+                f"Rank {self.rank}, Worker {self.worker_id}: shard {shard_index} "
+                f"from dataset {dataset_index} ({dataset_path}); "
+                f"load={self._last_shard_load_time:.2f}s, "
+                f"wait={wait_end - wait_start:.2f}s, samples={len(self.curr_shard)}"
             )
 
             # Start caching next shard immediately
@@ -471,13 +469,18 @@ class ShardedMixtureDataset(IterableDataset):
         ]
         # Submit background loading job
         self._cache_job = self._executor.submit(
-            self.datasets[next_dataset_idx].get_shard, next_shard_idx
+            self._load_shard, next_dataset_idx, next_shard_idx
         )
+
+    def _load_shard(self, dataset_idx: int, shard_idx: int) -> tuple[list, float]:
+        load_start = time.perf_counter()
+        shard = self.datasets[dataset_idx].get_shard(shard_idx)
+        return shard, time.perf_counter() - load_start
 
     def finish_cache_shard(self):
         """Wait for the background caching job to complete and retrieve the shard."""
         assert self._cache_job is not None
-        self.curr_shard = self._cache_job.result()
+        self.curr_shard, self._last_shard_load_time = self._cache_job.result()
         self._cache_job = None
 
     def delete_cached_shard(self):

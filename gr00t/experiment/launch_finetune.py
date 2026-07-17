@@ -41,6 +41,118 @@ def load_modality_config(modality_config_path: str):
         raise FileNotFoundError(f"Modality config path does not exist: {modality_config_path}")
 
 
+def parse_dataset_path_groups(dataset_path_groups: list[str]) -> list[list[str]]:
+    """Parse comma-separated dataset path groups from the finetune CLI."""
+    parsed_groups = []
+    for group in dataset_path_groups:
+        paths = [path.strip() for path in group.split(",") if path.strip()]
+        if len(paths) == 0:
+            raise ValueError("--dataset-path-groups contains an empty dataset group")
+        parsed_groups.append(paths)
+    return parsed_groups
+
+
+def get_mix_ratios(ft_config: FinetuneConfig, expected_len: int, flag_name: str) -> list[float]:
+    if ft_config.dataset_mix_ratios is None:
+        return [1.0] * expected_len
+
+    if len(ft_config.dataset_mix_ratios) != expected_len:
+        raise ValueError(
+            "--dataset-mix-ratios must have the same length as "
+            f"{flag_name} ({len(ft_config.dataset_mix_ratios)} != {expected_len})"
+        )
+    return ft_config.dataset_mix_ratios
+
+
+def get_embodiment_tags(ft_config: FinetuneConfig, expected_len: int, flag_name: str) -> list[str]:
+    if ft_config.dataset_embodiment_tags is None:
+        if ft_config.embodiment_tag is None:
+            raise ValueError("Either --embodiment-tag or --dataset-embodiment-tags must be provided")
+        return [ft_config.embodiment_tag.value] * expected_len
+
+    if len(ft_config.dataset_embodiment_tags) != expected_len:
+        raise ValueError(
+            "--dataset-embodiment-tags must have the same length as "
+            f"{flag_name} ({len(ft_config.dataset_embodiment_tags)} != {expected_len})"
+        )
+    return [tag.value for tag in ft_config.dataset_embodiment_tags]
+
+
+def build_dataset_configs(ft_config: FinetuneConfig) -> list[dict]:
+    """Build data.datasets config for single-dataset or multi-dataset finetuning."""
+    if ft_config.dataset_path_groups is not None:
+        if len(ft_config.dataset_path_groups) == 0:
+            raise ValueError("--dataset-path-groups must contain at least one dataset group")
+
+        dataset_path_groups = parse_dataset_path_groups(ft_config.dataset_path_groups)
+        mix_ratios = get_mix_ratios(
+            ft_config, len(dataset_path_groups), "--dataset-path-groups"
+        )
+        embodiment_tags = get_embodiment_tags(
+            ft_config, len(dataset_path_groups), "--dataset-path-groups"
+        )
+
+        return [
+            {
+                "dataset_paths": dataset_paths,
+                "mix_ratio": mix_ratio,
+                "embodiment_tag": dataset_embodiment_tag,
+            }
+            for dataset_paths, mix_ratio, dataset_embodiment_tag in zip(
+                dataset_path_groups, mix_ratios, embodiment_tags
+            )
+        ]
+
+    if ft_config.dataset_paths is not None:
+        if len(ft_config.dataset_paths) == 0:
+            raise ValueError("--dataset-paths must contain at least one dataset path")
+
+        mix_ratios = get_mix_ratios(ft_config, len(ft_config.dataset_paths), "--dataset-paths")
+        embodiment_tags = get_embodiment_tags(
+            ft_config, len(ft_config.dataset_paths), "--dataset-paths"
+        )
+
+        return [
+            {
+                "dataset_paths": [dataset_path],
+                "mix_ratio": mix_ratio,
+                "embodiment_tag": dataset_embodiment_tag,
+            }
+            for dataset_path, mix_ratio, dataset_embodiment_tag in zip(
+                ft_config.dataset_paths, mix_ratios, embodiment_tags
+            )
+        ]
+
+    if ft_config.dataset_path is None:
+        raise ValueError(
+            "Either --dataset-path, --dataset-paths, or --dataset-path-groups must be provided"
+        )
+
+    if ft_config.dataset_mix_ratios is not None:
+        raise ValueError(
+            "--dataset-mix-ratios can only be used with "
+            "--dataset-paths or --dataset-path-groups"
+        )
+
+    if ft_config.dataset_embodiment_tags is not None:
+        raise ValueError(
+            "--dataset-embodiment-tags can only be used with "
+            "--dataset-paths or --dataset-path-groups"
+        )
+
+    if ft_config.embodiment_tag is None:
+        raise ValueError("--embodiment-tag must be provided when using --dataset-path")
+
+    return [
+        {
+            "dataset_paths": [ft_config.dataset_path],
+            "mix_ratio": 1.0,
+            "embodiment_tag": ft_config.embodiment_tag.value,
+        }
+    ]
+
+
+
 if __name__ == "__main__":
     # Set LOGURU_LEVEL environment variable if not already set (default: INFO)
     if "LOGURU_LEVEL" not in os.environ:
@@ -62,13 +174,7 @@ if __name__ == "__main__":
         {
             "data": {
                 "download_cache": False,
-                "datasets": [
-                    {
-                        "dataset_paths": dataset_paths,
-                        "mix_ratio": 1.0,
-                        "embodiment_tag": embodiment_tag,
-                    }
-                ],
+                "datasets": build_dataset_configs(ft_config),
             }
         }
     )

@@ -141,7 +141,8 @@ class EmbodimentTag(Enum):
     RoboCasa Panda arm tasks with an Omron gripper.
     Uses the custom-embodiment finetuning projector slot.
     """
-
+    UNITREE_G1_29OF = "unitree_g1_29dof"
+    UNITREE_G1_29OF_HAND = "unitree_g1_29dof_hand"
     @classmethod
     def resolve(cls, tag: "str | EmbodimentTag") -> "EmbodimentTag":
         """Resolve a string to an EmbodimentTag, case-insensitively.

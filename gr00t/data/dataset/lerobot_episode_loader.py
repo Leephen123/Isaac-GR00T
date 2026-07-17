@@ -280,20 +280,17 @@ class LeRobotEpisodeLoader:
         # video key names than the dataset's modality.json (e.g., N1.6 vs N1.7 naming).
         self._video_key_mapping: dict[str, str] = {}
         if "video" in modality_configs and "video" in self.modality_meta:
-            config_keys = modality_configs["video"].modality_keys
-            meta_keys = list(self.modality_meta["video"].keys())
-            needs_mapping = any(k not in self.modality_meta["video"] for k in config_keys)
-            if needs_mapping:
-                assert len(config_keys) == len(meta_keys), (
-                    f"Cannot auto-map video keys: config has {len(config_keys)} keys "
-                    f"{config_keys} but dataset modality meta has {len(meta_keys)} keys "
-                    f"{meta_keys}. Counts must match for positional mapping."
-                )
-                for config_key, meta_key in zip(config_keys, meta_keys):
-                    self._video_key_mapping[config_key] = meta_key
-                logging.warning(
-                    f"Video key mismatch between model config and dataset. "
-                    f"Auto-mapping by position: {self._video_key_mapping}"
+            config_keys = set(modality_configs["video"].modality_keys)
+            meta_keys = set(self.modality_meta["video"].keys())
+            missing_keys = config_keys - meta_keys
+            if missing_keys:
+                raise ValueError(
+                    f"Video modality_keys {sorted(missing_keys)} in modality_config "
+                    f"not found in modality.json. "
+                    f"modality_config expects: {sorted(config_keys)}, "
+                    f"modality.json defines: {sorted(meta_keys)}. "
+                    f"Please ensure modality.json and your modality_config use the "
+                    f"same video key names."
                 )
 
         return modality_configs
@@ -420,11 +417,9 @@ class LeRobotEpisodeLoader:
         image_keys = self.modality_configs["video"].modality_keys
 
         for image_key in image_keys:
-            # Resolve the original key used in video file naming.
-            # Use the video key mapping if the config key differs from the dataset meta key.
-            meta_key = self._video_key_mapping.get(image_key, image_key)
-            original_key = self.modality_meta["video"][meta_key].get(
-                "original_key", f"observation.images.{meta_key}"
+            # Resolve the original key used in video file naming
+            original_key = self.modality_meta["video"][image_key].get(
+                "original_key", f"observation.images.{image_key}"
             )
             assert original_key in self.feature_config, (
                 f"Original key {original_key} not found in feature config"
@@ -442,7 +437,8 @@ class LeRobotEpisodeLoader:
             video_data[image_key] = get_frames_by_indices(
                 str(video_path),
                 indices,
-                decoder_kwargs=self.decoder_kwargs or {},
+                video_backend=self.video_backend,
+                video_backend_kwargs=self.video_backend_kwargs or {},
             )
 
         return video_data
@@ -562,9 +558,49 @@ class LeRobotEpisodeLoader:
             raise ValueError(f"Language key {lang_key} not supported")
         return new_languages
 
-    def __getitem__(self, idx: int) -> pd.DataFrame:
+    @staticmethod
+    def _normalize_requested_indices(
+        indices: np.ndarray | None, episode_length: int
+    ) -> np.ndarray:
+        if indices is None:
+            return np.arange(episode_length)
+
+        indices = np.asarray(indices, dtype=np.int64)
+        if indices.ndim != 1:
+            raise ValueError(f"Frame indices must be one-dimensional, got {indices.shape}")
+        if np.any(indices < 0) or np.any(indices >= episode_length):
+            raise IndexError(
+                f"Frame indices must be in [0, {episode_length}), got "
+                f"[{indices.min()}, {indices.max()}]"
+            )
+        return np.unique(indices)
+
+    @staticmethod
+    def _add_indexed_data(
+        df: pd.DataFrame,
+        prefix: str,
+        data: dict[str, np.ndarray],
+        indices: np.ndarray,
+    ) -> None:
+        """Add decoded data at selected rows without materializing unused frames."""
+        for key, values in data.items():
+            assert len(values) == len(indices), (
+                f"{prefix} data for {key} has length {len(values)}, "
+                f"expected {len(indices)}"
+            )
+            indexed_values = [None] * len(df)
+            for row_index, value in zip(indices, values):
+                indexed_values[int(row_index)] = value
+            df[f"{prefix}.{key}"] = indexed_values
+
+    def get_episode(
+        self,
+        idx: int,
+        video_indices: np.ndarray | None = None,
+        mask_indices: np.ndarray | None = None,
+    ) -> pd.DataFrame:
         """
-        Load complete episode data as a processed DataFrame.
+        Load episode data, optionally decoding only selected video and mask rows.
 
         Combines parquet data loading and video decoding to create a unified DataFrame
         containing all modality data for the episode. Video frames are converted to
@@ -600,25 +636,22 @@ class LeRobotEpisodeLoader:
         actual_length = min(len(df), nominal_length)
         df = df.iloc[:actual_length]
 
-        # Load synchronized video data
-        video_data = self._load_video_data(episode_id, np.arange(actual_length))
+        video_indices = self._normalize_requested_indices(video_indices, actual_length)
+        mask_indices = self._normalize_requested_indices(mask_indices, actual_length)
 
-        # Add video frames to dataframe as PIL Images
-        for key in video_data.keys():
-            assert len(video_data[key]) == len(df), (
-                f"Video data for {key} has length {len(video_data[key])} but dataframe has length {len(df)}"
-            )
-            df[f"video.{key}"] = [frame for frame in video_data[key]]
+        # Decode only rows used by the shard. Parquet and language data remain complete
+        # because they are inexpensive and preserve the original timestep indexing.
+        video_data = self._load_video_data(episode_id, video_indices)
+        self._add_indexed_data(df, "video", video_data, video_indices)
 
-        # Load synchronized mask data
-        mask_data = self._load_mask_data(episode_id, np.arange(actual_length))
-        for key in mask_data.keys():
-            assert len(mask_data[key]) == len(df), (
-                f"Mask data for {key} has length {len(mask_data[key])} but dataframe has length {len(df)}"
-            )
-            df[f"mask.{key}"] = [mask for mask in mask_data[key]]
+        mask_data = self._load_mask_data(episode_id, mask_indices)
+        self._add_indexed_data(df, "mask", mask_data, mask_indices)
 
         return df
+
+    def __getitem__(self, idx: int) -> pd.DataFrame:
+        """Load all modalities for a complete episode."""
+        return self.get_episode(idx)
 
     def get_initial_actions(self):
         """
