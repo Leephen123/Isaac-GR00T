@@ -15,6 +15,7 @@ from lerobot.common.datasets.lerobot_dataset import LeRobotDataset
 
 SOURCE_JSON_NAME = "data_root_relative_6D.json"
 OUTPUT_JSON_NAME = "data_root_relative_6D_window_cont.json"
+IMAGE_FILE_SUFFIXES = frozenset({".bmp", ".jpeg", ".jpg", ".png", ".webp"})
 
 BODY_KEYS = ("imu", "body_joint", "mocap", "hand_cmd", "hand_state")
 SELECT_11_INDICES = [
@@ -186,6 +187,76 @@ def load_windowed_episode(ep_dir: Path, args: "DataSetArgs") -> list[dict[str, A
     )
 
 
+def _finalize_video_only_dataset(
+    output_path: Path,
+    cameras: list[str],
+    num_episodes: int,
+) -> None:
+    """Verify the encoded MP4 files, then remove temporary frame images.
+
+    LeRobot accepts numpy image arrays in ``add_frame`` and may use individual
+    image files as an encoding cache. GR00T training reads the encoded videos
+    through ``meta/info.json::video_path`` and does not need that cache once all
+    episodes have been saved.
+    """
+    info_path = output_path / "meta" / "info.json"
+    if not info_path.is_file():
+        raise FileNotFoundError(f"LeRobot metadata was not written: {info_path}")
+
+    with info_path.open("r", encoding="utf-8") as f:
+        info = json.load(f)
+
+    video_path_pattern = info.get("video_path")
+    if not video_path_pattern:
+        raise ValueError(f"{info_path} does not define video_path")
+    chunks_size = int(info["chunks_size"])
+
+    missing_or_empty: list[Path] = []
+    for episode_index in range(num_episodes):
+        episode_chunk = episode_index // chunks_size
+        for camera in cameras:
+            video_key = f"observation.images.{camera}"
+            video_path = output_path / video_path_pattern.format(
+                episode_chunk=episode_chunk,
+                episode_index=episode_index,
+                video_key=video_key,
+            )
+            if not video_path.is_file() or video_path.stat().st_size == 0:
+                missing_or_empty.append(video_path)
+
+    if missing_or_empty:
+        preview = "\n".join(str(path) for path in missing_or_empty[:10])
+        raise RuntimeError(
+            f"Refusing to delete frame images: {len(missing_or_empty)} encoded video(s) "
+            f"are missing or empty. First entries:\n{preview}"
+        )
+
+    frame_images = [
+        path
+        for path in output_path.rglob("*")
+        if path.is_file() and path.suffix.lower() in IMAGE_FILE_SUFFIXES
+    ]
+    for path in frame_images:
+        path.unlink()
+
+    # Remove directories made empty by deleting LeRobot's frame-image cache.
+    directories = sorted(
+        (path for path in output_path.rglob("*") if path.is_dir()),
+        key=lambda path: len(path.parts),
+        reverse=True,
+    )
+    for directory in directories:
+        try:
+            directory.rmdir()
+        except OSError:
+            pass
+
+    print(
+        f"Verified {num_episodes * len(cameras)} MP4 file(s) and removed "
+        f"{len(frame_images)} temporary frame image(s)."
+    )
+
+
 def convert(args: "DataSetArgs") -> None:
     episode_dirs = _collect_episodes(args.input_dirs)
     print(f"Total: {len(episode_dirs)} episode(s)\n")
@@ -259,6 +330,11 @@ def convert(args: "DataSetArgs") -> None:
 
         dataset.save_episode(task=instruction)
 
+    _finalize_video_only_dataset(
+        output_path=output_path,
+        cameras=args.cameras,
+        num_episodes=len(episode_dirs),
+    )
     print(f"\nDone! {len(episode_dirs)} episodes saved to {output_path}")
 
 
