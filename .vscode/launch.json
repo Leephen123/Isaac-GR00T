@@ -86,7 +86,7 @@
             "module": "torch.distributed.run",
             "cwd": "${workspaceFolder}",
             "console": "integratedTerminal",
-            "justMyCode": false,
+            "justMyCode": true,
             "subProcess": true,
             "args": [
                 "--nproc_per_node=8",
