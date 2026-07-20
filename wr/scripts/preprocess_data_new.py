@@ -7,7 +7,7 @@ from tqdm import tqdm
 import tyro
 
 from data_res.log import get_logger
-from data_res.transforms import quaternion_to_rotation_6d, mocap_to_root_relative
+from data_res.transforms import quaternion_to_rotation_6d, mocap_to_root_relative_delta
 from data_res.utils import NumpyEncoder, load_mocap_imu_data, standardize_mocap, standardize_imu
 
 logger = get_logger(__name__)
@@ -49,7 +49,7 @@ def preprocess_data(cfg: PreprocessConfig) -> None:
             mocap_standard_6d = quaternion_to_rotation_6d(mocap_standard)
             imu_standard_6d = quaternion_to_rotation_6d(imu_standard)
 
-            mocap_root_relative = mocap_to_root_relative(mocap_standard_6d)
+            mocap_root_relative = mocap_to_root_relative_delta(mocap_standard_6d)
 
             with data_json.open("r", encoding="utf-8") as f:
                 records = json.load(f)

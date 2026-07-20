@@ -387,6 +387,27 @@ def mocap_to_root_relative(data: np.ndarray) -> np.ndarray:
     return np.concatenate([root_delta, mocap_data_flat], axis=1)
 
 
+def mocap_to_root_relative_delta(data: np.ndarray) -> np.ndarray:
+    """Convert mocap xyz to root-relative forward deltas.
+
+    The output layout stays identical to :func:`mocap_to_root_relative`, but
+    every joint xyz at index ``t`` is
+    ``root_relative_xyz[t + 1] - root_relative_xyz[t]``. The final xyz delta is
+    zero, matching the existing root-delta boundary convention. Rotations are
+    kept unchanged at their original frame.
+    """
+    converted = mocap_to_root_relative(data)
+    mocap_data = converted[:, 3:].reshape(-1, 15, 9).copy()
+    root_relative_xyz = mocap_data[:, :, :3].copy()
+
+    mocap_data[:, :, :3] = 0.0
+    if len(mocap_data) > 1:
+        mocap_data[:-1, :, :3] = root_relative_xyz[1:] - root_relative_xyz[:-1]
+
+    converted[:, 3:] = mocap_data.reshape(len(mocap_data), -1)
+    return converted
+
+
 def restore_mocap_from_root_relative(
     mocap_root_rel: np.ndarray,
     init_root_xyz: np.ndarray | None = None,
