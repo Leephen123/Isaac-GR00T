@@ -508,6 +508,12 @@ class BodyPoseSubscriberV3:
             root_pose[3:] = self.get_msg_self().wxyz[:4]
             return root_pose
 
+    def get_15_pose7(self) -> np.ndarray | None:
+        """Return the latest 15-point pose when using the V2 body-pose topic."""
+        if self.tag != "v2":
+            return None
+        return self.body_pose.get_15_pose7()
+
 
 # ============================================================
 # WR_GAE BodyPose V2: 15-point pose7 extractor
