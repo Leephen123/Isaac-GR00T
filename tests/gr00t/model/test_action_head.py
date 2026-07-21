@@ -123,6 +123,24 @@ class TestActionHeadForward:
         out = head.forward(_make_backbone_output(config), _make_action_input(config))
         assert torch.isfinite(out["loss"])
 
+    def test_split_head_forward_uses_both_decoders(self):
+        config = _small_config(body_action_dim=5, hand_action_dim=2)
+        head = Gr00tN1d7ActionHead(config)
+        head.train()
+
+        out = head.forward(_make_backbone_output(config), _make_action_input(config))
+        out["loss"].backward()
+
+        assert "body_loss" in out
+        assert "hand_loss" in out
+        assert any(parameter.grad is not None for parameter in head.action_decoder.parameters())
+        assert any(parameter.grad is not None for parameter in head.hand_action_decoder.parameters())
+
+    def test_hand_dimension_requires_body_dimension(self):
+        config = _small_config(hand_action_dim=2)
+        with pytest.raises(ValueError, match="hand_action_dim requires body_action_dim"):
+            Gr00tN1d7ActionHead(config)
+
 
 class TestActionHeadGetAction:
     """Test inference (denoising loop)."""
@@ -151,6 +169,18 @@ class TestActionHeadGetAction:
             action_input,
         )
         assert out["action_pred"].shape[0] == 1
+
+    def test_split_head_get_action_masks_unused_coordinates(self):
+        config = _small_config(max_action_dim=9, body_action_dim=5, hand_action_dim=2)
+        head = Gr00tN1d7ActionHead(config)
+        head.eval()
+        action_input = _make_action_input(config)
+        del action_input["action"]
+
+        out = head.get_action(_make_backbone_output(config), action_input)
+
+        assert out["action_pred"].shape == (2, config.action_horizon, config.max_action_dim)
+        assert torch.count_nonzero(out["action_pred"][..., 7:]) == 0
 
 
 class TestActionHeadEncodeFeatures:

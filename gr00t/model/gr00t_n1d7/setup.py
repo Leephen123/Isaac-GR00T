@@ -79,6 +79,13 @@ class Gr00tN1d7Pipeline(ModelPipeline):
         """Setup model with proper vocabulary expansion."""
         skip_weight_loading = getattr(self.config.training, "skip_weight_loading", False)
         if self.config.training.start_from_checkpoint is not None and not skip_weight_loading:
+            split_head_overrides = {}
+            if self.config.model.body_action_dim is not None:
+                split_head_overrides = {
+                    "body_action_dim": self.config.model.body_action_dim,
+                    "hand_action_dim": self.config.model.hand_action_dim,
+                    "hand_loss_weight": self.config.model.hand_loss_weight,
+                }
             model, loading_info = AutoModel.from_pretrained(
                 self.config.training.start_from_checkpoint,
                 model_name=self.model_config.model_name,
@@ -87,9 +94,6 @@ class Gr00tN1d7Pipeline(ModelPipeline):
                 tune_projector=self.config.model.tune_projector,
                 tune_diffusion_model=self.config.model.tune_diffusion_model,
                 tune_vlln=self.config.model.tune_vlln,
-                body_action_dim=self.config.model.body_action_dim,
-                hand_action_dim=self.config.model.hand_action_dim,
-                hand_loss_weight=self.config.model.hand_loss_weight,
                 action_horizon=self.model_config.action_horizon,
                 state_history_length=self.model_config.state_history_length,
                 state_dropout_prob=self.config.model.state_dropout_prob,
@@ -98,6 +102,7 @@ class Gr00tN1d7Pipeline(ModelPipeline):
                 transformers_loading_kwargs=self.transformers_loading_kwargs,
                 output_loading_info=True,
                 ignore_mismatched_sizes=True,
+                **split_head_overrides,
                 **self.transformers_loading_kwargs,
             )
 
@@ -109,7 +114,7 @@ class Gr00tN1d7Pipeline(ModelPipeline):
                         0.02 * torch.randn_like(model.action_head.mask_token)
                     )
                 logging.info("mask_token not in checkpoint - initialized")
-                
+
             # Old checkpoints do not contain the optional hand branch.  Seed it
             # from the loaded body branch instead of leaving it randomly initialized.
             hand_encoder_missing = any(
@@ -140,7 +145,14 @@ class Gr00tN1d7Pipeline(ModelPipeline):
             unexpected_mismatched_keys = [
                 key for key in mismatched_keys if key not in allowed_mismatched_keys
             ]
-            other_missing = [k for k in missing_keys if "mask_token" not in k]
+            handled_missing_keys = {
+                key
+                for key in missing_keys
+                if "mask_token" in key
+                or (hand_encoder_missing and "action_head.hand_action_encoder" in key)
+                or (hand_decoder_missing and "action_head.hand_action_decoder" in key)
+            }
+            other_missing = [key for key in missing_keys if key not in handled_missing_keys]
             errors = []
             if other_missing:
                 errors.append(f"Missing keys ({len(other_missing)}): {other_missing}")

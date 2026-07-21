@@ -19,8 +19,8 @@ This module provides the core policy classes for running Gr00t models:
 - Gr00tPolicy: Base policy class for model inference
 - Gr00tSimPolicyWrapper: Wrapper for compatibility with existing Gr00t simulation environments
 """
-import time
 from pathlib import Path
+import time
 from typing import Any
 
 import numpy as np
@@ -581,6 +581,7 @@ class Gr00tPolicy(BasePolicy):
         Returns:
             Dictionary containing the info after resetting the policy
         """
+        self.rtc_prev_action = None
         return {}
 
 

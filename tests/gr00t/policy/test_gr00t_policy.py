@@ -169,6 +169,12 @@ class TestGr00tPolicyGetAction:
         assert isinstance(action, dict)
         assert isinstance(info, dict)
 
+    def test_reset_clears_rtc_previous_action(self, policy):
+        policy.rtc_prev_action = torch.randn(1, 16, 128)
+
+        assert policy.reset() == {}
+        assert policy.rtc_prev_action is None
+
 
 class _NumpyLanguageSimPolicy:
     def __init__(self):

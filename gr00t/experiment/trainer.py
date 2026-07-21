@@ -164,12 +164,20 @@ class Gr00tTrainer(Trainer):
         """
         self.action_offset = kwargs.pop("action_offset", None)
         self.multiprocessing_context = kwargs.pop("multiprocessing_context", "fork")
+        self._split_loss_sums: dict[str, torch.Tensor] = {}
+        self._split_loss_count = 0
         super().__init__(*args, **kwargs)
 
     def log(self, logs: dict[str, float], start_time: Optional[float] = None) -> None:
         # Hide epoch from logged metrics as it's misleading for Iterable datasets.
         epoch = self.state.epoch
         self.state.epoch = None
+        if self._split_loss_count > 0 and ("loss" in logs or "train_loss" in logs):
+            for key, value in self._split_loss_sums.items():
+                mean = value / self._split_loss_count
+                logs[f"train_{key}"] = self._nested_gather(mean).mean().item()
+            self._split_loss_sums.clear()
+            self._split_loss_count = 0
         super().log(logs, start_time=start_time)
         self.state.epoch = epoch
 
@@ -293,7 +301,7 @@ class Gr00tTrainer(Trainer):
                         self._split_loss_sums[key] += value
             if "body_loss" in outputs and "hand_loss" in outputs:
                 self._split_loss_count += 1
-                
+
         # --------------------------------------------------------------
         # Accuracy calculation
         # --------------------------------------------------------------

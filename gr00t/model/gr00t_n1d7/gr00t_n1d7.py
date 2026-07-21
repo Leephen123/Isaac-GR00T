@@ -14,14 +14,13 @@
 # limitations under the License.
 
 import logging
-from typing import Any, Tuple
+import math as th
+from typing import Any, Optional, Tuple
 
 import torch
 from torch import nn
 from torch.distributions import Beta
 import torch.nn.functional as F
-import math as th
-from typing import Any, Optional, Tuple
 from transformers import AutoConfig, AutoModel, PreTrainedModel
 from transformers.feature_extraction_utils import BatchFeature
 import tree
@@ -82,6 +81,9 @@ class Gr00tN1d7ActionHead(nn.Module):
             hidden_dim=self.hidden_size,
             output_dim=self.action_dim,
         )
+
+        if config.body_action_dim is None and config.hand_action_dim is not None:
+            raise ValueError("hand_action_dim requires body_action_dim to be configured")
 
         self.use_separate_hand_head = config.body_action_dim is not None
         if self.use_separate_hand_head:
@@ -327,7 +329,6 @@ class Gr00tN1d7ActionHead(nn.Module):
 
         # Get vision and language embeddings.
         vl_embeds = backbone_output.backbone_features
-        device = vl_embeds.device
 
         # Get embodiment ID.
         embodiment_id = action_input.embodiment_id
@@ -392,8 +393,11 @@ class Gr00tN1d7ActionHead(nn.Module):
                 return_all_hidden_states=True,
             )
 
-        pred = self.action_decoder(model_output, embodiment_id)
-        pred_actions = pred[:, -actions.shape[1] :]
+        pred_actions, _, _ = self._decode_action_velocity(
+            model_output,
+            actions.shape[1],
+            embodiment_id,
+        )
 
         # Slice out only the action portion of pred and target.
         action_mask = action_input.action_mask

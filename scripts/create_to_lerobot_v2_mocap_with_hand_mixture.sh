@@ -61,7 +61,7 @@ cd /liujinxin/liyifan/gr00tN1.7/Isaac-GR00T
 source .venv/bin/activate
 
 # export CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7
-export CUDA_VISIBLE_DEVICES=0,1,2,3,4
+export CUDA_VISIBLE_DEVICES=0,1,2,3
 torchrun --nproc_per_node="${NUM_GPUS}" --master_port=29500 \
     gr00t/experiment/launch_finetune.py \
     --base-model-path /liujinxin/liyifan/gr00tN1.7/Isaac-GR00T/checkpoints/2026-06-29_G1_real_6D_window_cont_rel_0518-0604/checkpoint-80000 \
@@ -79,6 +79,9 @@ torchrun --nproc_per_node="${NUM_GPUS}" --master_port=29500 \
     --learning_rate 3e-5 \
     --global_batch_size "${GLOBAL_BATCH_SIZE}" \
     --dataloader_num_workers 6 \
+    --body_action_dim 102 \
+    --hand_action_dim 12 \
+    --hand_loss_weight 0.1 \
     --action_horizon 50 \
     --state_history_length 50 \
     --use_wandb \
