@@ -73,6 +73,20 @@ class FinetuneConfig:
     tune_diffusion_model: bool = True
     """If True, fine-tune the diffusion-based action decoder (if present in the model)."""
 
+    body_action_dim: int | None = None
+    """
+    Number of leading action dimensions belonging to the robot body.
+    When set, the remaining valid action dimensions are treated as hand actions and
+    independent body/hand action encoders and decoders are enabled. If omitted, the
+    original single-head model is preserved.
+    """
+
+    hand_action_dim: int | None = None
+    """Number of hand dimensions immediately following the body action dimensions."""
+
+    hand_loss_weight: float = 0.1
+    """Weight applied to hand loss when body_action_dim enables the split action head."""
+
     action_horizon: int = 50
     """Number of future action steps predicted by the action head."""
 

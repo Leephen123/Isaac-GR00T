@@ -283,6 +283,17 @@ class Gr00tTrainer(Trainer):
         # Record last loss for testing purposes.
         self.loss = loss
 
+        if model.training:
+            for key in ("body_loss", "hand_loss"):
+                if key in outputs:
+                    value = outputs[key].detach().float()
+                    if key not in self._split_loss_sums:
+                        self._split_loss_sums[key] = value.clone()
+                    else:
+                        self._split_loss_sums[key] += value
+            if "body_loss" in outputs and "hand_loss" in outputs:
+                self._split_loss_count += 1
+                
         # --------------------------------------------------------------
         # Accuracy calculation
         # --------------------------------------------------------------

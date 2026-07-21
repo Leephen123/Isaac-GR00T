@@ -87,6 +87,9 @@ class Gr00tN1d7Pipeline(ModelPipeline):
                 tune_projector=self.config.model.tune_projector,
                 tune_diffusion_model=self.config.model.tune_diffusion_model,
                 tune_vlln=self.config.model.tune_vlln,
+                body_action_dim=self.config.model.body_action_dim,
+                hand_action_dim=self.config.model.hand_action_dim,
+                hand_loss_weight=self.config.model.hand_loss_weight,
                 action_horizon=self.model_config.action_horizon,
                 state_history_length=self.model_config.state_history_length,
                 state_dropout_prob=self.config.model.state_dropout_prob,
@@ -106,6 +109,25 @@ class Gr00tN1d7Pipeline(ModelPipeline):
                         0.02 * torch.randn_like(model.action_head.mask_token)
                     )
                 logging.info("mask_token not in checkpoint - initialized")
+                
+            # Old checkpoints do not contain the optional hand branch.  Seed it
+            # from the loaded body branch instead of leaving it randomly initialized.
+            hand_encoder_missing = any(
+                "action_head.hand_action_encoder" in key for key in missing_keys
+            )
+            hand_decoder_missing = any(
+                "action_head.hand_action_decoder" in key for key in missing_keys
+            )
+            if model.action_head.use_separate_hand_head and hand_encoder_missing:
+                model.action_head.hand_action_encoder.load_state_dict(
+                    model.action_head.action_encoder.state_dict()
+                )
+                logging.info("hand action encoder initialized from body action encoder")
+            if model.action_head.use_separate_hand_head and hand_decoder_missing:
+                model.action_head.hand_action_decoder.load_state_dict(
+                    model.action_head.action_decoder.state_dict()
+                )
+                logging.info("hand action decoder initialized from body action decoder")
 
             unexpected_keys = loading_info.get("unexpected_keys", [])
             mismatched_keys = loading_info.get("mismatched_keys", [])
