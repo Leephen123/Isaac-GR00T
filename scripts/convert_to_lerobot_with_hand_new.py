@@ -13,7 +13,7 @@ import sys
 sys.path.append("/liujinxin/liyifan/Isaac-GR00T/third_party/lerobot-main")
 from lerobot.common.datasets.lerobot_dataset import LeRobotDataset
 
-SOURCE_JSON_NAME = "data_root_relative_6D.json"
+SOURCE_JSON_NAME = "data_all_points_relative_6D.json"
 OUTPUT_JSON_NAME = "data_root_relative_6D_window_cont.json"
 IMAGE_FILE_SUFFIXES = frozenset({".bmp", ".jpeg", ".jpg", ".png", ".webp"})
 
@@ -342,15 +342,21 @@ def convert(args: "DataSetArgs") -> None:
 class DataSetArgs:
     input_dirs: list[Path] = field(
         default_factory=lambda: [
-            Path("/liujinxin/dataset/piper/G1/0626_pick_cube_bottle_four_g1_5cube"),
-            Path("/liujinxin/dataset/piper/G1/0626_pick_cube_bottle_g1"),
-            Path("/liujinxin/dataset/piper/G1/0626_pick_cube_bottle_g1_5cube"),
-            Path("/liujinxin/dataset/piper/G1/0626_pick_cube_bottle_g1_mid"),
+            Path("/liujinxin/dataset/piper/G1/0717_clean_items_basket_2"),
+            Path("/liujinxin/dataset/piper/G1/0717_clean_items_basket_g1_2_2"),
+            Path("/liujinxin/dataset/piper/G1/0717_clean_items_basket_g1_mid_search_2"),
+            Path("/liujinxin/dataset/piper/G1/0717_clean_items_basket_g1_mid_walk_diagonally_2"),
+            Path("/liujinxin/dataset/piper/G1/0717_clean_items_basket_mistake_2"),
+            Path("/liujinxin/dataset/piper/G1/0720_clean_items_basket_g1_2"),
+            Path("/liujinxin/dataset/piper/G1/0720_clean_items_basket_g1_mistake_case12_1"),
+            Path("/liujinxin/dataset/piper/G1/0720_clean_items_basket_g1_mistake_case32_3"),
+            Path("/liujinxin/dataset/piper/G1/0720_clean_items_basket_g1_mistake_closecatch_1"),
+            Path("/liujinxin/dataset/piper/G1/0720_clean_items_basket_g1_mistake_closecatch_3"),
         ]
     )
     """One or more directories, each containing episode_* subfolders."""
 
-    output_dir: Path = Path("/liujinxin/liyifan/Isaac-GR00T/dataset/G1_hand_window_pick_water_bowl_sink_0609-0610")
+    output_dir: Path = Path("/liujinxin/liyifan/Isaac-GR00T/dataset/0717_clean_items_basket")
     """Output directory for the LeRobot v2 dataset."""
 
     fps: int = 20

@@ -20,6 +20,7 @@ import torch
 from torch import nn
 from torch.distributions import Beta
 import torch.nn.functional as F
+import math as th
 from transformers import AutoConfig, AutoModel, PreTrainedModel
 from transformers.feature_extraction_utils import BatchFeature
 import tree
@@ -81,6 +82,42 @@ class Gr00tN1d7ActionHead(nn.Module):
             output_dim=self.action_dim,
         )
 
+        self.use_separate_hand_head = config.body_action_dim is not None
+        if self.use_separate_hand_head:
+            if not 0 < config.body_action_dim < self.action_dim:
+                raise ValueError(
+                    f"body_action_dim must be in [1, {self.action_dim - 1}], "
+                    f"got {config.body_action_dim}"
+                )
+            if config.hand_action_dim is None or config.hand_action_dim <= 0:
+                raise ValueError(
+                    "hand_action_dim must be a positive integer when body_action_dim is set"
+                )
+            if config.body_action_dim + config.hand_action_dim > self.action_dim:
+                raise ValueError(
+                    "body_action_dim + hand_action_dim must not exceed max_action_dim, "
+                    f"got {config.body_action_dim} + {config.hand_action_dim} > "
+                    f"{self.action_dim}"
+                )
+            if not th.isfinite(config.hand_loss_weight) or config.hand_loss_weight < 0:
+                raise ValueError(
+                    "hand_loss_weight must be finite and non-negative, "
+                    f"got {config.hand_loss_weight}"
+                )
+            # Do not encode the hand as another embodiment.  Body and hand use
+            # independent parameters while retaining the real embodiment id.
+            self.hand_action_encoder = MultiEmbodimentActionEncoder(
+                action_dim=self.action_dim,
+                hidden_size=self.input_embedding_dim,
+                num_embodiments=config.max_num_embodiments,
+            )
+            self.hand_action_decoder = CategorySpecificMLP(
+                num_categories=config.max_num_embodiments,
+                input_dim=self.hidden_size,
+                hidden_dim=self.hidden_size,
+                output_dim=self.action_dim,
+            )
+
         self.vlln = (
             nn.LayerNorm(config.backbone_embedding_dim) if config.use_vlln else nn.Identity()
         )
@@ -130,6 +167,9 @@ class Gr00tN1d7ActionHead(nn.Module):
             self.state_encoder.requires_grad_(False)
             self.action_encoder.requires_grad_(False)
             self.action_decoder.requires_grad_(False)
+            if self.use_separate_hand_head:
+                self.hand_action_encoder.requires_grad_(False)
+                self.hand_action_decoder.requires_grad_(False)
             if self.config.add_pos_embed:
                 self.position_embedding.requires_grad_(False)
         if not tune_diffusion_model:
@@ -159,6 +199,9 @@ class Gr00tN1d7ActionHead(nn.Module):
                 self.state_encoder.eval()
                 self.action_encoder.eval()
                 self.action_decoder.eval()
+                if self.use_separate_hand_head:
+                    self.hand_action_encoder.eval()
+                    self.hand_action_decoder.eval()
                 if self.config.add_pos_embed:
                     self.position_embedding.eval()
             if not self.tune_diffusion_model:
@@ -275,15 +318,35 @@ class Gr00tN1d7ActionHead(nn.Module):
         # Slice out only the action portion of pred and target.
         action_mask = action_input.action_mask
         action_loss = F.mse_loss(pred_actions, velocity, reduction="none") * action_mask
-        loss = action_loss.sum() / (action_mask.sum() + 1e-6)
+        if not self.use_separate_hand_head:
+            loss = action_loss.sum() / (action_mask.sum() + 1e-6)
+            body_loss = None
+            hand_loss = None
+        else:
+            body_action_dim = self.config.body_action_dim
+            hand_action_end = body_action_dim + self.config.hand_action_dim
+            body_mask = action_mask[..., :body_action_dim]
+            hand_mask = action_mask[..., body_action_dim:hand_action_end]
+            body_loss_sum = action_loss[..., :body_action_dim].sum()
+            hand_loss_sum = action_loss[..., body_action_dim:hand_action_end].sum()
+            body_loss_count = body_mask.sum()
+            hand_loss_count = hand_mask.sum()
+            body_loss = body_loss_sum / body_loss_count.clamp_min(1e-6)
+            hand_loss = hand_loss_sum / hand_loss_count.clamp_min(1e-6)
+            loss = body_loss + self.config.hand_loss_weight * hand_loss
 
-        return {
+        outputs = {
             "loss": loss,
             "action_loss": action_loss,
             "action_mask": action_mask,
             "backbone_features": vl_embeds,
             "state_features": state_features,
         }
+        if body_loss is not None and hand_loss is not None:
+            outputs["body_loss"] = body_loss.detach()
+            outputs["hand_loss"] = hand_loss.detach()
+
+        return outputs
 
     def _encode_features(
         self, backbone_output: BatchFeature, action_input: BatchFeature
@@ -351,47 +414,77 @@ class Gr00tN1d7ActionHead(nn.Module):
             dtype=vl_embeds.dtype,
             device=device,
         )
+        if self.use_separate_hand_head:
+            body_mask, hand_mask = self._action_coordinate_masks(actions)
+            actions = actions * (body_mask + hand_mask)
 
         dt = 1.0 / self.num_inference_timesteps
         vel_strength = torch.ones_like(actions)
 
-        if "action" in action_input:
-            # If action in input when doing get action, it means we want to use RTC.
-            # action_horizon is the action horizon of the input action.
+        rtc_keys = {"rtc_overlap_steps", "rtc_frozen_steps", "rtc_ramp_rate"}
+        rtc_option_keys = rtc_keys | {"rtc_prev_action"}
+        provided_rtc_option_keys = rtc_option_keys.intersection(options or {})
+        if provided_rtc_option_keys:
             # rtc_overlap_steps is the number of steps to overlap with the previous action chunks.
             # rtc_frozen_steps is the number of steps to freeze the action, which is the latency of the policy inference.
             # rtc_ramp_rate is the rate of the ramp of denoising the actions.
-            assert options is not None, "options is not None"
-            assert "action_horizon" in options, "action_horizon is not in options"
-            assert "rtc_overlap_steps" in options, "rtc_overlap_steps is not in options"
-            assert "rtc_frozen_steps" in options, "rtc_frozen_steps is not in options"
-            assert "rtc_ramp_rate" in options, "rtc_ramp_rate is not in options"
+            missing_rtc_keys = sorted(rtc_keys - options.keys())
+            if missing_rtc_keys:
+                raise ValueError(f"Missing GR00T RTC options: {missing_rtc_keys}")
 
-            action_horizon_before_padding = options["action_horizon"]
+            rtc_overlap_steps = int(options["rtc_overlap_steps"])
+            rtc_frozen_steps = int(options["rtc_frozen_steps"])
+            rtc_ramp_rate = float(options["rtc_ramp_rate"])
+            if not 0 <= rtc_frozen_steps <= rtc_overlap_steps <= self.action_horizon:
+                raise ValueError(
+                    "GR00T RTC requires 0 <= rtc_frozen_steps <= rtc_overlap_steps "
+                    f"<= action_horizon, got frozen={rtc_frozen_steps}, "
+                    f"overlap={rtc_overlap_steps}, H={self.action_horizon}"
+                )
+            if not th.isfinite(rtc_ramp_rate) or rtc_ramp_rate <= 0:
+                raise ValueError(f"rtc_ramp_rate must be positive, got {rtc_ramp_rate}")
 
-            # Use previous action instead of pure noise to do inpainting
-            actions[:, : options["rtc_overlap_steps"], :] = action_input["action"][
-                :,
-                action_horizon_before_padding
-                - options["rtc_overlap_steps"] : action_horizon_before_padding,
-                :,
-            ]
-            vel_strength[:, : options["rtc_frozen_steps"], :] = 0.0
-            # NOTE: use an exponential ramp strength to set the remaining unfrozen rtc_steps
-            intermediate_steps = options["rtc_overlap_steps"] - options["rtc_frozen_steps"]
-            # Create exponential ramp from 0 to 1 over intermediate steps
-            t = torch.linspace(0.0, 1.0, intermediate_steps + 2, device=device)
-            ramp = 1 - torch.exp(-options["rtc_ramp_rate"] * t)
-            ramp = ramp / ramp[-1].clamp_min(1e-8)  # normalize to [0,1]
-            ramp = ramp[
-                1:-1
-            ]  # we will only take the middle part of the ramp, ignore the 0.0 and 1.0
-            # Apply ramp to the intermediate steps [batch, intermediate_steps, action_dim]
-            vel_strength[
-                :,
-                options["rtc_frozen_steps"] : options["rtc_overlap_steps"],
-                :,
-            ] = ramp[None, :, None].to(device)
+            if "action" in action_input:
+                previous_actions = torch.as_tensor(
+                    action_input["action"],
+                    device=device,
+                    dtype=actions.dtype,
+                )
+                if previous_actions.shape != actions.shape:
+                    raise ValueError(
+                        f"GR00T RTC previous action shape error: expected {tuple(actions.shape)}, "
+                        f"got {tuple(previous_actions.shape)}"
+                    )
+                if not torch.isfinite(previous_actions).all():
+                    raise ValueError("GR00T RTC previous action must contain only finite values")
+
+                # Use previous action instead of pure noise to do inpainting
+                if rtc_overlap_steps > 0:
+                    actions[:, :rtc_overlap_steps, :] = previous_actions[
+                        :,
+                        -rtc_overlap_steps:,
+                        :,
+                    ]
+                vel_strength[:, :rtc_frozen_steps, :] = 0.0
+                # NOTE: use an exponential ramp strength to set the remaining unfrozen rtc_steps
+                intermediate_steps = rtc_overlap_steps - rtc_frozen_steps
+                # Create exponential ramp from 0 to 1 over intermediate steps
+                t = torch.linspace(0.0, 1.0, intermediate_steps + 2, device=device)
+                ramp = 1 - torch.exp(-rtc_ramp_rate * t)
+                ramp = ramp / ramp[-1].clamp_min(1e-8)  # normalize to [0,1]
+                ramp = ramp[
+                    1:-1
+                ]  # we will only take the middle part of the ramp, ignore the 0.0 and 1.0
+                # Apply ramp to the intermediate steps [batch, intermediate_steps, action_dim]
+                vel_strength[
+                    :,
+                    rtc_frozen_steps:rtc_overlap_steps,
+                    :,
+                ] = ramp[None, :, None].to(device)
+
+        if self.use_separate_hand_head:
+            body_mask, hand_mask = self._action_coordinate_masks(actions)
+            actions = actions * (body_mask + hand_mask)
 
         # Run denoising steps.
         for t in range(self.num_inference_timesteps):
@@ -402,12 +495,10 @@ class Gr00tN1d7ActionHead(nn.Module):
             timesteps_tensor = torch.full(
                 size=(batch_size,), fill_value=t_discretized, device=device
             )
-            action_features = self.action_encoder(actions, timesteps_tensor, embodiment_id)
-            # Add position embedding.
-            if self.config.add_pos_embed:
-                pos_ids = torch.arange(action_features.shape[1], dtype=torch.long, device=device)
-                pos_embs = self.position_embedding(pos_ids).unsqueeze(0)
-                action_features = action_features + pos_embs
+            action_features = self._encode_action_features(
+                actions, timesteps_tensor, embodiment_id
+            )
+            action_features = self._add_action_position_embedding(action_features)
 
             # Join vision, language, state and action embedding along sequence dimension.
             sa_embs = torch.cat((state_features, action_features), dim=1)
@@ -427,9 +518,9 @@ class Gr00tN1d7ActionHead(nn.Module):
                     encoder_hidden_states=vl_embeds,
                     timestep=timesteps_tensor,
                 )
-            pred = self.action_decoder(model_output, embodiment_id)
-
-            pred_velocity = pred[:, -self.action_horizon :]
+            pred_velocity, _, _ = self._decode_action_velocity(
+                model_output, self.action_horizon, embodiment_id
+            )
 
             # Update actions using euler integration.
             actions = actions + dt * pred_velocity * vel_strength
@@ -610,7 +701,8 @@ class Gr00tN1d7(PreTrainedModel):
         """
         # Prepare inputs for backbone and action head
         backbone_inputs, action_inputs = self.prepare_input(inputs)
-
+        if options is not None and options.get("rtc_prev_action") is not None:
+            action_inputs["action"] = options["rtc_prev_action"]
         # Forward through backbone
         backbone_outputs = self.backbone(backbone_inputs)
         action_outputs = self.action_head.get_action(backbone_outputs, action_inputs, options)

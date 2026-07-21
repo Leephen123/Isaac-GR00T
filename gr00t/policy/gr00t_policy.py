@@ -19,7 +19,7 @@ This module provides the core policy classes for running Gr00t models:
 - Gr00tPolicy: Base policy class for model inference
 - Gr00tSimPolicyWrapper: Wrapper for compatibility with existing Gr00t simulation environments
 """
-
+import time
 from pathlib import Path
 from typing import Any
 
@@ -65,6 +65,22 @@ def _sim_language_batch_to_sequence(value: Any) -> Any:
     if isinstance(value, str):
         return [value]
     return value
+
+def _synchronize_cuda_if_needed(model: torch.nn.Module) -> None:
+    """Synchronize CUDA work so timing captures async GPU execution."""
+    if not torch.cuda.is_available():
+        return
+
+    device = getattr(model, "device", None)
+    if device is None:
+        try:
+            device = next(model.parameters()).device
+        except StopIteration:
+            return
+
+    device = torch.device(device)
+    if device.type == "cuda":
+        torch.cuda.synchronize(device)
 
 
 class Gr00tPolicy(BasePolicy):
@@ -173,6 +189,7 @@ class Gr00tPolicy(BasePolicy):
         assert len(language_keys) >= 1, "At least one language key is required"
         assert len(language_delta_indices) == 1, "Only one language delta index is supported"
         self.language_key = language_keys[0]
+        self.rtc_prev_action = None
 
     def _unbatch_observation(self, value: dict[str, Any]) -> list[dict[str, Any]]:
         """Unbatch a batched observation into a list of single observations.
@@ -396,6 +413,7 @@ class Gr00tPolicy(BasePolicy):
         Returns:
             Tuple of (actions_dict, info_dict)
         """
+        total_start = time.perf_counter()
         # Step 1: Split batched observation into individual observations
         unbatched_observations = self._unbatch_observation(observation)
         processed_inputs = []
@@ -411,10 +429,67 @@ class Gr00tPolicy(BasePolicy):
         # Step 3: Collate processed inputs into a single batch for model
         collated_inputs = self.collate_fn(processed_inputs)
         collated_inputs = _rec_to_dtype(collated_inputs, dtype=torch.bfloat16)
+        gr00t_rtc_keys = {"rtc_overlap_steps", "rtc_frozen_steps", "rtc_ramp_rate"}
+        provided_gr00t_rtc_keys = gr00t_rtc_keys.intersection(observation)
 
+        if provided_gr00t_rtc_keys and provided_gr00t_rtc_keys != gr00t_rtc_keys:
+            missing_gr00t_rtc_keys = sorted(gr00t_rtc_keys - provided_gr00t_rtc_keys)
+            raise ValueError(f"Incomplete GR00T RTC inputs; missing keys: {missing_gr00t_rtc_keys}")
         # Step 4: Run model inference to predict actions
-        with torch.inference_mode():
-            model_pred = self.model.get_action(**collated_inputs)
+        if provided_gr00t_rtc_keys:
+            infer_mode = "Gr00t RTC"
+            rtc_overlap_steps = int(np.asarray(observation["rtc_overlap_steps"]).item())
+            rtc_frozen_steps = int(np.asarray(observation["rtc_frozen_steps"]).item())
+            rtc_ramp_rate = float(np.asarray(observation["rtc_ramp_rate"]).item())
+            action_horizon = self.model.action_head.action_horizon
+            if not 0 <= rtc_frozen_steps <= rtc_overlap_steps <= action_horizon:
+                raise ValueError(
+                    "GR00T RTC requires 0 <= rtc_frozen_steps <= rtc_overlap_steps "
+                    f"<= action_horizon, got frozen={rtc_frozen_steps}, "
+                    f"overlap={rtc_overlap_steps}, H={action_horizon}"
+                )
+            if not np.isfinite(rtc_ramp_rate) or rtc_ramp_rate <= 0:
+                raise ValueError(f"rtc_ramp_rate must be positive, got {rtc_ramp_rate}")
+            previous_actions = self.rtc_prev_action
+            expected_rtc_shape = (
+                len(unbatched_observations),
+                action_horizon,
+                self.model.action_head.action_dim,
+            )
+            if previous_actions is not None and previous_actions.shape != expected_rtc_shape:
+                raise ValueError(
+                    "GR00T RTC previous actions must contain the full normalized model chunk "
+                    f"with shape {expected_rtc_shape}, got {previous_actions.shape}"
+                )
+            if previous_actions is not None and not torch.isfinite(previous_actions).all():
+                raise ValueError("GR00T RTC previous actions must contain only finite values")
+            rtc_options = {
+                "rtc_overlap_steps": rtc_overlap_steps,
+                "rtc_frozen_steps": rtc_frozen_steps,
+                "rtc_ramp_rate": rtc_ramp_rate,
+                "rtc_prev_action": previous_actions,
+            }
+            preprocess_ms = (time.perf_counter() - total_start) * 1000.0
+            _synchronize_cuda_if_needed(self.model)
+            model_inference_start = time.perf_counter()
+            with torch.inference_mode():
+                model_pred = self.model.get_action(
+                    **collated_inputs,
+                    options=rtc_options,
+                )
+            _synchronize_cuda_if_needed(self.model)
+            model_inference_ms = (time.perf_counter() - model_inference_start) * 1000.0
+        else:
+            infer_mode = "Normal"
+            preprocess_ms = (time.perf_counter() - total_start) * 1000.0
+            _synchronize_cuda_if_needed(self.model)
+            model_inference_start = time.perf_counter()
+            with torch.inference_mode():
+                model_pred = self.model.get_action(**collated_inputs)
+            _synchronize_cuda_if_needed(self.model)
+            model_inference_ms = (time.perf_counter() - model_inference_start) * 1000.0
+
+        postprocess_start = time.perf_counter()
         normalized_action = model_pred["action_pred"].float()
 
         # Step 5: Decode actions from normalized space back to physical units
@@ -429,7 +504,25 @@ class Gr00tPolicy(BasePolicy):
         casted_action = {
             key: value.astype(np.float32) for key, value in unnormalized_action.items()
         }
-        return casted_action, {}
+        self.rtc_prev_action = normalized_action.detach().clone()
+        postprocess_ms = (time.perf_counter() - postprocess_start) * 1000.0
+
+        timing = {
+            "preprocess_ms": preprocess_ms,
+            "model_inference_ms": model_inference_ms,
+            "postprocess_ms": postprocess_ms,
+            "total_ms": (time.perf_counter() - total_start) * 1000.0,
+        }
+        print(
+            f"{infer_mode} inference timing: "
+            f"preprocess={timing['preprocess_ms']:.2f} ms, "
+            f"model={timing['model_inference_ms']:.2f} ms, "
+            f"postprocess={timing['postprocess_ms']:.2f} ms, "
+            f"total={timing['total_ms']:.2f} ms",
+            flush=True,
+        )
+        info = {"timing": timing}
+        return casted_action, info
 
     def check_action(self, action: dict[str, Any]) -> None:
         """Validate that the action has the correct structure and types.
