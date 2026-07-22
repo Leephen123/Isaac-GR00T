@@ -30,10 +30,11 @@ from data_res.log import get_logger
 from data_res.transforms import (
     compute_absolute,
     compute_imu_relative,
+    compute_relative,
     interpolate_pose7,
     normalize_quaternion,
     quaternion_to_rotation_6d,
-    restore_mocap_from_root_relative,
+    restore_mocap_from_root_relative_delta,
     rotation_6d_to_quaternion,
     smooth_pose7_quat_sign,
 )
@@ -317,8 +318,11 @@ class ExecutedActionRecorder:
 
 
 def model_action_to_abs_action(
-    action_output: np.ndarray, init_pose: np.ndarray, root_rel_cum: np.ndarray | None = None
-) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    action_output: np.ndarray,
+    init_pose: np.ndarray,
+    root_rel_cum: np.ndarray,
+    joint_rel_cum: np.ndarray,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     action_output = np.asarray(action_output, dtype=np.float32)
     logger.info("action output shape: %s", action_output.shape)
 
@@ -332,10 +336,11 @@ def model_action_to_abs_action(
     action_mocap = np.concatenate([action_mocap_xyz, action_mocap_6d], axis=-1).reshape(-1, 99)
     action_mocap = np.concatenate([root_delta, action_mocap], axis=-1)
 
-    if root_rel_cum is None:
-        action_11x9, root_rel_cum = restore_mocap_from_root_relative(action_mocap)
-    else:
-        action_11x9, root_rel_cum = restore_mocap_from_root_relative(action_mocap, root_rel_cum)
+    action_11x9, root_rel_cum, joint_rel_cum = restore_mocap_from_root_relative_delta(
+        action_mocap,
+        root_rel_cum,
+        joint_rel_cum,
+    )
 
     num_frames = action_11x9.shape[0]
     action_15x9 = np.zeros((num_frames, 15, 9), dtype=np.float32)
@@ -351,7 +356,7 @@ def model_action_to_abs_action(
     ans = compute_absolute(init_pose_x7_flat, action_15x7_flat).reshape(
         num_frames, num_joints, num_poses
     )
-    return ans, root_rel_cum, action_hand
+    return ans, root_rel_cum, joint_rel_cum, action_hand
 
 
 def interpolate_hand_joint(hand_joint_seq: np.ndarray, num_interp: int) -> np.ndarray:
@@ -632,7 +637,16 @@ if __name__ == "__main__":
     # )
     # root_pose = root_pose
     print(f"root_pose : {root_pose}")
+    relative_reference_pose = root_pose.copy()
     root_pose[2] = 1.0
+    pose15 = body_pose.get_15_pose7()
+    if pose15 is None:
+        raise RuntimeError("Failed to receive the initial 15-point body pose")
+    root_tiled = np.repeat(
+        relative_reference_pose[None, :], MOCAP_NUM_JOINTS, axis=0
+    )
+    pose15_rel = compute_relative(root_tiled, pose15)
+    joint_rel_cum = pose15_rel[SELECT_11_INDICES, :3].astype(np.float32)
 
 
     action_recorder = ExecutedActionRecorder(
@@ -642,7 +656,7 @@ if __name__ == "__main__":
 
     try:
         action_recorder.start()
-        root_rel_cum = None
+        root_rel_cum = np.zeros(3, dtype=np.float32)
         last_action = None
         last_hand_action = None
         for idx in range(config.roll_out):
@@ -659,8 +673,11 @@ if __name__ == "__main__":
             action_chunk_rel = client.get_action(observation)[0]["mocap"][0]
             # ret = client.get_action(observation)[0]
             # action_chunk_rel = np.concatenate((ret["root_delta"][0], ret["mocap_xyz"][0], ret["mocap_rot6d"][0]), axis=-1).reshape(-1)
-            action_chunk_abs, root_rel_cum, action_hand = model_action_to_abs_action(
-                action_chunk_rel, root_pose, root_rel_cum
+            action_chunk_abs, root_rel_cum, joint_rel_cum, action_hand = model_action_to_abs_action(
+                action_chunk_rel,
+                root_pose,
+                root_rel_cum,
+                joint_rel_cum,
             )
 
             action_chunk_abs, action_hand, policy_step_mask = build_action_frames(
