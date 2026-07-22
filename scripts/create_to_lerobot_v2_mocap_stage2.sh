@@ -42,13 +42,13 @@ INPUT_PATH2="/liujinxin/dataset/piper/G1/0713_pick_cube_bottle_g1_fix_2"
 # deactivate
 
 ###
-REPO_NAME2="0717_clean_items_basket_g1_0717_0720_all_points_rel"
+REPO_NAME2="0721_clean_items_basket_g1_all_points_rel"
 DATASET_PATH2="/liujinxin/liyifan/Isaac-GR00T/dataset/${REPO_NAME2}"
 
-cd /liujinxin/liyifan/Isaac-GR00T/
+cd /liujinxin/liyifan/gr00tN1.7/Isaac-GR00T/
 source /liujinxin/conda3/bin/activate dreamzero
 
-python scripts/convert_to_lerobot_new_with_hand.py \
+python scripts/convert_to_lerobot_with_hand_new.py \
     --output_dir "${DATASET_PATH2}"
 
 cp "/liujinxin/liyifan/Isaac-GR00T/scripts/${MODALITY_NAME}.json" "${DATASET_PATH2}/meta/modality.json"

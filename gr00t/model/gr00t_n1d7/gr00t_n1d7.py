@@ -499,6 +499,7 @@ class Gr00tN1d7ActionHead(nn.Module):
             device=device,
         )
         if self.use_separate_hand_head:
+            print("use_separate_hand_head!!!!!")
             body_mask, hand_mask = self._action_coordinate_masks(actions)
             actions = actions * (body_mask + hand_mask)
 

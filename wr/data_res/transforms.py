@@ -501,7 +501,10 @@ def restore_mocap_from_root_relative_delta(
 
     root_delta = mocap_root_rel_delta[:, :3]
     mocap_data = mocap_root_rel_delta[:, 3:].reshape(-1, 11, 9).copy()
-    joint_relative_delta = mocap_data[:, :, :3]
+    # Keep the original deltas for the continuation state below.  ``mocap_data``
+    # is overwritten with absolute XYZ before returning, so a view here would
+    # otherwise be silently changed to absolute positions.
+    joint_relative_delta = mocap_data[:, :, :3].copy()
     num_frames = mocap_root_rel_delta.shape[0]
 
     root_xyz = np.zeros((num_frames, 3), dtype=dtype)

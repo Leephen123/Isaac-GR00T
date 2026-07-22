@@ -84,7 +84,7 @@ class FinetuneConfig:
     hand_action_dim: int | None = None
     """Number of hand dimensions immediately following the body action dimensions."""
 
-    hand_loss_weight: float = 0.1
+    hand_loss_weight: float = 1
     """Weight applied to hand loss when body_action_dim enables the split action head."""
 
     action_horizon: int = 50

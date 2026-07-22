@@ -342,16 +342,14 @@ def convert(args: "DataSetArgs") -> None:
 class DataSetArgs:
     input_dirs: list[Path] = field(
         default_factory=lambda: [
-            Path("/liujinxin/dataset/piper/G1/0717_clean_items_basket_2"),
-            Path("/liujinxin/dataset/piper/G1/0717_clean_items_basket_g1_2_2"),
-            Path("/liujinxin/dataset/piper/G1/0717_clean_items_basket_g1_mid_search_2"),
-            Path("/liujinxin/dataset/piper/G1/0717_clean_items_basket_g1_mid_walk_diagonally_2"),
-            Path("/liujinxin/dataset/piper/G1/0717_clean_items_basket_mistake_2"),
-            Path("/liujinxin/dataset/piper/G1/0720_clean_items_basket_g1_2"),
-            Path("/liujinxin/dataset/piper/G1/0720_clean_items_basket_g1_mistake_case12_1"),
-            Path("/liujinxin/dataset/piper/G1/0720_clean_items_basket_g1_mistake_case32_3"),
-            Path("/liujinxin/dataset/piper/G1/0720_clean_items_basket_g1_mistake_closecatch_1"),
-            Path("/liujinxin/dataset/piper/G1/0720_clean_items_basket_g1_mistake_closecatch_3"),
+            Path("/liujinxin/dataset/piper/G1/0721_clean_items_basket_g1_bottle_sideways_1"),
+            Path("/liujinxin/dataset/piper/G1/0721_clean_items_basket_g1_bottle_sideways_3"),
+            Path("/liujinxin/dataset/piper/G1/0721_clean_items_basket_g1_mid_search_1"),
+            Path("/liujinxin/dataset/piper/G1/0721_clean_items_basket_g1_mid_search_3"),
+            Path("/liujinxin/dataset/piper/G1/0721_clean_items_basket_g1_mistake_case1_3"),
+            Path("/liujinxin/dataset/piper/G1/0721_clean_items_basket_g1_mid_search_3"),
+            Path("/liujinxin/dataset/piper/G1/0721_clean_items_basket_g1_mistakes_walk_diagonally_1"),
+            Path("/liujinxin/dataset/piper/G1/0721_clean_items_basket_g1_mistakes_walk_diagonally_3"),
         ]
     )
     """One or more directories, each containing episode_* subfolders."""
