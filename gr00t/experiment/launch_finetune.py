@@ -206,10 +206,12 @@ if __name__ == "__main__":
     config.model.action_horizon = ft_config.action_horizon
     config.model.state_history_length = ft_config.state_history_length
     config.model.state_dropout_prob = ft_config.state_dropout_prob
+    config.model.state_noise = ft_config.state_noise
     config.model.state_noise_prob = ft_config.state_noise_prob
     config.model.state_noise_max_std = ft_config.state_noise_max_std
     config.model.state_noise_gamma = ft_config.state_noise_gamma
     config.model.state_noise_smooth_kernel = ft_config.state_noise_smooth_kernel
+    config.model.history_shift = ft_config.history_shift
     config.model.history_shift_prob = ft_config.history_shift_prob
     config.model.history_shift_max_frames = ft_config.history_shift_max_frames
     config.model.history_shift_protect_last = ft_config.history_shift_protect_last

@@ -248,10 +248,12 @@ class Gr00tN1d7Processor(BaseProcessor):
         # State augmentation
         exclude_state: bool = False,
         state_dropout_prob: float = 0.0,
+        state_noise: bool = False,
         state_noise_prob: float = 0.3,
         state_noise_max_std: float = 0.01,
         state_noise_gamma: float = 2.0,
         state_noise_smooth_kernel: int = 5,
+        history_shift: bool = False,
         history_shift_prob: float = 0.2,
         history_shift_max_frames: int = 2,
         history_shift_protect_last: int = 5,
@@ -282,10 +284,12 @@ class Gr00tN1d7Processor(BaseProcessor):
         # State augmentation settings
         self.exclude_state = exclude_state
         self.state_dropout_prob = state_dropout_prob
+        self.state_noise = state_noise
         self.state_noise_prob = state_noise_prob
         self.state_noise_max_std = state_noise_max_std
         self.state_noise_gamma = state_noise_gamma
         self.state_noise_smooth_kernel = state_noise_smooth_kernel
+        self.history_shift = history_shift
         self.history_shift_prob = history_shift_prob
         self.history_shift_max_frames = history_shift_max_frames
         self.history_shift_protect_last = history_shift_protect_last
@@ -686,7 +690,8 @@ class Gr00tN1d7Processor(BaseProcessor):
         augmented_states = normalized_states
 
         if (
-            self.state_noise_prob > 0.0
+            self.state_noise
+            and self.state_noise_prob > 0.0
             and self.state_noise_max_std > 0.0
             and random.random() < self.state_noise_prob
         ):
@@ -730,7 +735,8 @@ class Gr00tN1d7Processor(BaseProcessor):
         shiftable_steps = num_steps - min(self.history_shift_protect_last, num_steps)
         max_shift = min(self.history_shift_max_frames, max(shiftable_steps - 1, 0))
         if (
-            shiftable_steps > 1
+            self.history_shift
+            and shiftable_steps > 1
             and max_shift > 0
             and self.history_shift_prob > 0.0
             and random.random() < self.history_shift_prob
@@ -973,10 +979,12 @@ class Gr00tN1d7Processor(BaseProcessor):
                 # State augmentation
                 "exclude_state": self.exclude_state,
                 "state_dropout_prob": self.state_dropout_prob,
+                "state_noise": self.state_noise,
                 "state_noise_prob": self.state_noise_prob,
                 "state_noise_max_std": self.state_noise_max_std,
                 "state_noise_gamma": self.state_noise_gamma,
                 "state_noise_smooth_kernel": self.state_noise_smooth_kernel,
+                "history_shift": self.history_shift,
                 "history_shift_prob": self.history_shift_prob,
                 "history_shift_max_frames": self.history_shift_max_frames,
                 "history_shift_protect_last": self.history_shift_protect_last,
@@ -1063,10 +1071,12 @@ class Gr00tN1d7Processor(BaseProcessor):
                 "use_relative_action",
                 "exclude_state",
                 "state_dropout_prob",
+                "state_noise",
                 "state_noise_prob",
                 "state_noise_max_std",
                 "state_noise_gamma",
                 "state_noise_smooth_kernel",
+                "history_shift",
                 "history_shift_prob",
                 "history_shift_max_frames",
                 "history_shift_protect_last",
