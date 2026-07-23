@@ -61,12 +61,26 @@ def proc_config():
 
 
 class TestG1HistoryAugmentation:
+    def test_disabled_augmentations_leave_history_unchanged(self, processor):
+        processor.train()
+        processor.state_noise = False
+        processor.state_noise_prob = 1.0
+        processor.history_shift = False
+        processor.history_shift_prob = 1.0
+
+        states = torch.randn(50, 47)
+        augmented = processor._augment_g1_history_states(states)
+
+        assert torch.equal(augmented, states)
+
     def test_noise_preserves_rotation_and_current_state(self, processor):
         processor.train()
+        processor.state_noise = True
         processor.state_noise_prob = 1.0
         processor.state_noise_max_std = 0.01
         processor.state_noise_gamma = 2.0
         processor.state_noise_smooth_kernel = 5
+        processor.history_shift = False
         processor.history_shift_prob = 0.0
 
         states = torch.zeros(50, 47)
@@ -79,7 +93,9 @@ class TestG1HistoryAugmentation:
 
     def test_shift_protects_most_recent_frames(self, processor):
         processor.train()
+        processor.state_noise = False
         processor.state_noise_prob = 0.0
+        processor.history_shift = True
         processor.history_shift_prob = 1.0
         processor.history_shift_max_frames = 2
         processor.history_shift_protect_last = 5

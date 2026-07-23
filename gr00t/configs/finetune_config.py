@@ -107,6 +107,9 @@ class FinetuneConfig:
     Dropout probability applied to state inputs for regularization during training.
     """
 
+    state_noise: bool = False
+    """Enable temporally smooth, age-scaled noise for G1 state history."""
+
     state_noise_prob: float = 0.3
     """Probability of applying temporally smooth, age-scaled noise to G1 state history."""
 
@@ -118,6 +121,9 @@ class FinetuneConfig:
 
     state_noise_smooth_kernel: int = 5
     """Odd temporal averaging kernel used to smooth G1 history noise."""
+
+    history_shift: bool = False
+    """Enable temporal shifting for the older portion of G1 state history."""
 
     history_shift_prob: float = 0.2
     """Probability of temporally shifting the unprotected portion of G1 state history."""
