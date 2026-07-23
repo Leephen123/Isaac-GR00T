@@ -27,6 +27,7 @@ import albumentations as A
 import numpy as np
 from PIL import Image
 import torch
+import torch.nn.functional as F
 import torchvision.transforms.v2 as transforms
 from transformers import AutoProcessor
 from transformers.feature_extraction_utils import BatchFeature
@@ -247,6 +248,13 @@ class Gr00tN1d7Processor(BaseProcessor):
         # State augmentation
         exclude_state: bool = False,
         state_dropout_prob: float = 0.0,
+        state_noise_prob: float = 0.3,
+        state_noise_max_std: float = 0.01,
+        state_noise_gamma: float = 2.0,
+        state_noise_smooth_kernel: int = 5,
+        history_shift_prob: float = 0.2,
+        history_shift_max_frames: int = 2,
+        history_shift_protect_last: int = 5,
         # Normalization
         use_mean_std: bool = False,
         letter_box_transform: bool = False,
@@ -274,6 +282,28 @@ class Gr00tN1d7Processor(BaseProcessor):
         # State augmentation settings
         self.exclude_state = exclude_state
         self.state_dropout_prob = state_dropout_prob
+        self.state_noise_prob = state_noise_prob
+        self.state_noise_max_std = state_noise_max_std
+        self.state_noise_gamma = state_noise_gamma
+        self.state_noise_smooth_kernel = state_noise_smooth_kernel
+        self.history_shift_prob = history_shift_prob
+        self.history_shift_max_frames = history_shift_max_frames
+        self.history_shift_protect_last = history_shift_protect_last
+
+        if not 0.0 <= self.state_noise_prob <= 1.0:
+            raise ValueError("state_noise_prob must be in [0, 1]")
+        if self.state_noise_max_std < 0.0:
+            raise ValueError("state_noise_max_std must be non-negative")
+        if self.state_noise_gamma <= 0.0:
+            raise ValueError("state_noise_gamma must be positive")
+        if self.state_noise_smooth_kernel <= 0 or self.state_noise_smooth_kernel % 2 == 0:
+            raise ValueError("state_noise_smooth_kernel must be a positive odd integer")
+        if not 0.0 <= self.history_shift_prob <= 1.0:
+            raise ValueError("history_shift_prob must be in [0, 1]")
+        if self.history_shift_max_frames < 0:
+            raise ValueError("history_shift_max_frames must be non-negative")
+        if self.history_shift_protect_last < 0:
+            raise ValueError("history_shift_protect_last must be non-negative")
 
         self.letter_box_transform = letter_box_transform
 
@@ -647,6 +677,71 @@ class Gr00tN1d7Processor(BaseProcessor):
             )
         return normalized_states.reshape(state_horizon, state_dim)
 
+    def _augment_g1_history_states(self, normalized_states: torch.Tensor) -> torch.Tensor:
+        """Apply temporally smooth noise and an optional shift to normalized G1 history."""
+        if not self.training or normalized_states.shape[0] <= 1:
+            return normalized_states
+
+        num_steps, state_dim = normalized_states.shape
+        augmented_states = normalized_states
+
+        if (
+            self.state_noise_prob > 0.0
+            and self.state_noise_max_std > 0.0
+            and random.random() < self.state_noise_prob
+        ):
+            age = torch.arange(
+                num_steps - 1,
+                -1,
+                -1,
+                device=normalized_states.device,
+                dtype=normalized_states.dtype,
+            )
+            noise_scale = (age / max(num_steps - 1, 1)).pow(self.state_noise_gamma)
+            noise_scale[age < 5] *= 0.1
+
+            raw_noise = torch.randn(
+                1,
+                state_dim,
+                num_steps,
+                device=normalized_states.device,
+                dtype=normalized_states.dtype,
+            )
+            kernel_size = min(self.state_noise_smooth_kernel, 2 * num_steps - 1)
+            if kernel_size % 2 == 0:
+                kernel_size -= 1
+            smooth_noise = F.avg_pool1d(
+                raw_noise,
+                kernel_size=kernel_size,
+                stride=1,
+                padding=kernel_size // 2,
+            )
+            smooth_noise = smooth_noise.squeeze(0).transpose(0, 1)
+            smooth_noise = smooth_noise / smooth_noise.std(
+                dim=0,
+                keepdim=True,
+                unbiased=False,
+            ).clamp_min(1e-6)
+
+            noise = smooth_noise * (self.state_noise_max_std * noise_scale[:, None])
+            noise[:, :6] = 0.0  # Preserve the geometry of root rotation 6D.
+            augmented_states = augmented_states + noise
+
+        shiftable_steps = num_steps - min(self.history_shift_protect_last, num_steps)
+        max_shift = min(self.history_shift_max_frames, max(shiftable_steps - 1, 0))
+        if (
+            shiftable_steps > 1
+            and max_shift > 0
+            and self.history_shift_prob > 0.0
+            and random.random() < self.history_shift_prob
+        ):
+            shift = random.choice([*range(-max_shift, 0), *range(1, max_shift + 1)])
+            source_indices = torch.arange(shiftable_steps, device=normalized_states.device)
+            source_indices = (source_indices + shift).clamp(0, shiftable_steps - 1)
+            augmented_states = augmented_states.clone()
+            augmented_states[:shiftable_steps] = augmented_states[:shiftable_steps][source_indices]
+
+        return augmented_states
 
     def __call__(
         self,
@@ -719,11 +814,12 @@ class Gr00tN1d7Processor(BaseProcessor):
         exclude_state = self.exclude_state or getattr(
             self.modality_configs[embodiment_tag.value]["state"], "exclude_state", False
         )
-        if exclude_state or (
+        state_was_dropped = exclude_state or (
             self.state_dropout_prob > 0
             and random.random() < self.state_dropout_prob
             and self.training
-        ):
+        )
+        if state_was_dropped:
             normalized_states = torch.cat(
                 [torch.from_numpy(np.zeros_like(state_data[key])) for key in state_keys], dim=-1
             )
@@ -736,6 +832,12 @@ class Gr00tN1d7Processor(BaseProcessor):
             normalized_states = self._reshape_unitree_g1_29dof_states(normalized_states)
         if embodiment_tag in (EmbodimentTag.UNITREE_G1_29DOF_HAND,):
             normalized_states = self._reshape_unitree_g1_29dof_hand_states(normalized_states)
+
+        if not state_was_dropped and embodiment_tag in (
+            EmbodimentTag.UNITREE_G1_29DOF,
+            EmbodimentTag.UNITREE_G1_29DOF_HAND,
+        ):
+            normalized_states = self._augment_g1_history_states(normalized_states)
 
         normalized_states = torch.cat(
             [
@@ -871,6 +973,13 @@ class Gr00tN1d7Processor(BaseProcessor):
                 # State augmentation
                 "exclude_state": self.exclude_state,
                 "state_dropout_prob": self.state_dropout_prob,
+                "state_noise_prob": self.state_noise_prob,
+                "state_noise_max_std": self.state_noise_max_std,
+                "state_noise_gamma": self.state_noise_gamma,
+                "state_noise_smooth_kernel": self.state_noise_smooth_kernel,
+                "history_shift_prob": self.history_shift_prob,
+                "history_shift_max_frames": self.history_shift_max_frames,
+                "history_shift_protect_last": self.history_shift_protect_last,
             },
         }
         with open(main_config_file, "w") as f:
@@ -954,6 +1063,13 @@ class Gr00tN1d7Processor(BaseProcessor):
                 "use_relative_action",
                 "exclude_state",
                 "state_dropout_prob",
+                "state_noise_prob",
+                "state_noise_max_std",
+                "state_noise_gamma",
+                "state_noise_smooth_kernel",
+                "history_shift_prob",
+                "history_shift_max_frames",
+                "history_shift_protect_last",
                 "use_mean_std",
                 "model_name",
                 "model_type",

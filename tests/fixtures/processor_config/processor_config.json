@@ -145,6 +145,13 @@
     "apply_sincos_state_encoding": true,
     "use_relative_action": true,
     "exclude_state": false,
-    "state_dropout_prob": 0.0
+    "state_dropout_prob": 0.0,
+    "state_noise_prob": 0.3,
+    "state_noise_max_std": 0.01,
+    "state_noise_gamma": 2.0,
+    "state_noise_smooth_kernel": 5,
+    "history_shift_prob": 0.2,
+    "history_shift_max_frames": 2,
+    "history_shift_protect_last": 5
   }
 }

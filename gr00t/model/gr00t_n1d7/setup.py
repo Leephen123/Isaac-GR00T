@@ -239,6 +239,13 @@ class Gr00tN1d7Pipeline(ModelPipeline):
                 # State augmentation overrides
                 exclude_state=self.model_config.exclude_state,
                 state_dropout_prob=self.model_config.state_dropout_prob,
+                state_noise_prob=self.model_config.state_noise_prob,
+                state_noise_max_std=self.model_config.state_noise_max_std,
+                state_noise_gamma=self.model_config.state_noise_gamma,
+                state_noise_smooth_kernel=self.model_config.state_noise_smooth_kernel,
+                history_shift_prob=self.model_config.history_shift_prob,
+                history_shift_max_frames=self.model_config.history_shift_max_frames,
+                history_shift_protect_last=self.model_config.history_shift_protect_last,
                 use_mean_std=self.model_config.use_mean_std,
                 **self.transformers_loading_kwargs,
             )
@@ -268,6 +275,13 @@ class Gr00tN1d7Pipeline(ModelPipeline):
                 # State augmentation
                 exclude_state=self.model_config.exclude_state,
                 state_dropout_prob=self.model_config.state_dropout_prob,
+                state_noise_prob=self.model_config.state_noise_prob,
+                state_noise_max_std=self.model_config.state_noise_max_std,
+                state_noise_gamma=self.model_config.state_noise_gamma,
+                state_noise_smooth_kernel=self.model_config.state_noise_smooth_kernel,
+                history_shift_prob=self.model_config.history_shift_prob,
+                history_shift_max_frames=self.model_config.history_shift_max_frames,
+                history_shift_protect_last=self.model_config.history_shift_protect_last,
                 use_mean_std=self.model_config.use_mean_std,
                 transformers_loading_kwargs=self.transformers_loading_kwargs,
             )

@@ -119,6 +119,13 @@ class Gr00tN1d7Config(PretrainedConfig):
 
     # State augmentation parameters
     state_dropout_prob: float = 0.8  # State dropout probability
+    state_noise_prob: float = 0.3
+    state_noise_max_std: float = 0.01
+    state_noise_gamma: float = 2.0
+    state_noise_smooth_kernel: int = 5
+    history_shift_prob: float = 0.2
+    history_shift_max_frames: int = 2
+    history_shift_protect_last: int = 5
     exclude_state: bool = False  # Zero out all state inputs (ablation)
     use_mean_std: bool = False  # Use mean/std normalization instead of min/max
 
