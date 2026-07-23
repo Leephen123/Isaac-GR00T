@@ -198,10 +198,22 @@ if __name__ == "__main__":
     config.model.tune_visual = ft_config.tune_visual
     config.model.tune_projector = ft_config.tune_projector
     config.model.tune_diffusion_model = ft_config.tune_diffusion_model
-    if (ft_config.body_action_dim is None) != (ft_config.hand_action_dim is None):
-        raise ValueError("body_action_dim and hand_action_dim must be set together")
-    config.model.body_action_dim = ft_config.body_action_dim
+    split_action_dims = (
+        ft_config.xyz_action_dim,
+        ft_config.rotation_action_dim,
+        ft_config.hand_action_dim,
+    )
+    if any(dim is None for dim in split_action_dims) and not all(
+        dim is None for dim in split_action_dims
+    ):
+        raise ValueError(
+            "xyz_action_dim, rotation_action_dim, and hand_action_dim must be set together"
+        )
+    config.model.xyz_action_dim = ft_config.xyz_action_dim
+    config.model.rotation_action_dim = ft_config.rotation_action_dim
     config.model.hand_action_dim = ft_config.hand_action_dim
+    config.model.xyz_loss_weight = ft_config.xyz_loss_weight
+    config.model.rotation_loss_weight = ft_config.rotation_loss_weight
     config.model.hand_loss_weight = ft_config.hand_loss_weight
     config.model.action_horizon = ft_config.action_horizon
     config.model.state_history_length = ft_config.state_history_length

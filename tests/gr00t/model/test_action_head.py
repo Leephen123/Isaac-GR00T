@@ -123,23 +123,51 @@ class TestActionHeadForward:
         out = head.forward(_make_backbone_output(config), _make_action_input(config))
         assert torch.isfinite(out["loss"])
 
-    def test_split_head_forward_uses_both_decoders(self):
-        config = _small_config(body_action_dim=5, hand_action_dim=2)
+    def test_split_head_forward_uses_all_decoders(self):
+        config = _small_config(
+            xyz_action_dim=2,
+            rotation_action_dim=3,
+            hand_action_dim=2,
+        )
         head = Gr00tN1d7ActionHead(config)
         head.train()
 
         out = head.forward(_make_backbone_output(config), _make_action_input(config))
         out["loss"].backward()
 
-        assert "body_loss" in out
+        assert "xyz_loss" in out
+        assert "rotation_loss" in out
         assert "hand_loss" in out
+        assert any(parameter.grad is not None for parameter in head.xyz_action_decoder.parameters())
         assert any(parameter.grad is not None for parameter in head.action_decoder.parameters())
-        assert any(parameter.grad is not None for parameter in head.hand_action_decoder.parameters())
+        assert any(
+            parameter.grad is not None for parameter in head.hand_action_decoder.parameters()
+        )
 
-    def test_hand_dimension_requires_body_dimension(self):
+    def test_split_dimensions_must_be_configured_together(self):
         config = _small_config(hand_action_dim=2)
-        with pytest.raises(ValueError, match="hand_action_dim requires body_action_dim"):
+        with pytest.raises(ValueError, match="must be configured together"):
             Gr00tN1d7ActionHead(config)
+
+    def test_split_losses_are_independently_normalized_and_weighted(self):
+        config = _small_config(
+            xyz_action_dim=2,
+            rotation_action_dim=3,
+            hand_action_dim=2,
+            xyz_loss_weight=2.0,
+            rotation_loss_weight=3.0,
+            hand_loss_weight=4.0,
+        )
+        head = Gr00tN1d7ActionHead(config)
+        head.train()
+
+        out = head.forward(_make_backbone_output(config), _make_action_input(config))
+
+        assert torch.allclose(out["xyz_loss"], out["action_loss"][..., :2].mean())
+        assert torch.allclose(out["rotation_loss"], out["action_loss"][..., 2:5].mean())
+        assert torch.allclose(out["hand_loss"], out["action_loss"][..., 5:7].mean())
+        expected = 2.0 * out["xyz_loss"] + 3.0 * out["rotation_loss"] + 4.0 * out["hand_loss"]
+        assert torch.allclose(out["loss"], expected)
 
 
 class TestActionHeadGetAction:
@@ -171,7 +199,12 @@ class TestActionHeadGetAction:
         assert out["action_pred"].shape[0] == 1
 
     def test_split_head_get_action_masks_unused_coordinates(self):
-        config = _small_config(max_action_dim=9, body_action_dim=5, hand_action_dim=2)
+        config = _small_config(
+            max_action_dim=9,
+            xyz_action_dim=2,
+            rotation_action_dim=3,
+            hand_action_dim=2,
+        )
         head = Gr00tN1d7ActionHead(config)
         head.eval()
         action_input = _make_action_input(config)
