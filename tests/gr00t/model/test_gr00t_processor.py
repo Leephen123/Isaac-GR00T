@@ -30,6 +30,7 @@ from gr00t.data.types import MessageType, VLAStepData
 import numpy as np
 from PIL import Image
 import pytest
+import torch
 
 
 FIXTURE_DIR = Path(__file__).parent.parent.parent / "fixtures" / "processor_config"
@@ -57,6 +58,42 @@ def processor():
 def proc_config():
     with open(FIXTURE_DIR / "processor_config.json") as f:
         return json.load(f)["processor_kwargs"]
+
+
+class TestG1HistoryAugmentation:
+    def test_noise_preserves_rotation_and_current_state(self, processor):
+        processor.train()
+        processor.state_noise_prob = 1.0
+        processor.state_noise_max_std = 0.01
+        processor.state_noise_gamma = 2.0
+        processor.state_noise_smooth_kernel = 5
+        processor.history_shift_prob = 0.0
+
+        states = torch.zeros(50, 47)
+        torch.manual_seed(0)
+        augmented = processor._augment_g1_history_states(states)
+
+        assert torch.equal(augmented[:, :6], states[:, :6])
+        assert torch.equal(augmented[-1], states[-1])
+        assert torch.count_nonzero(augmented[:-1, 6:]) > 0
+
+    def test_shift_protects_most_recent_frames(self, processor):
+        processor.train()
+        processor.state_noise_prob = 0.0
+        processor.history_shift_prob = 1.0
+        processor.history_shift_max_frames = 2
+        processor.history_shift_protect_last = 5
+
+        states = torch.arange(50, dtype=torch.float32).unsqueeze(1).repeat(1, 47)
+        with patch(
+            "gr00t.model.gr00t_n1d7.processing_gr00t_n1d7.random.choice",
+            return_value=2,
+        ):
+            augmented = processor._augment_g1_history_states(states)
+
+        expected_indices = torch.arange(45).add(2).clamp(max=44)
+        assert torch.equal(augmented[:45], states[:45][expected_indices])
+        assert torch.equal(augmented[-5:], states[-5:])
 
 
 def test_from_pretrained_passes_hub_kwargs_to_cached_file(tmp_path):

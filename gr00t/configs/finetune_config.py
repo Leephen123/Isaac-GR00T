@@ -107,6 +107,27 @@ class FinetuneConfig:
     Dropout probability applied to state inputs for regularization during training.
     """
 
+    state_noise_prob: float = 0.3
+    """Probability of applying temporally smooth, age-scaled noise to G1 state history."""
+
+    state_noise_max_std: float = 0.01
+    """Maximum normalized noise standard deviation at the oldest G1 history step."""
+
+    state_noise_gamma: float = 2.0
+    """Exponent controlling how quickly state noise increases with history age."""
+
+    state_noise_smooth_kernel: int = 5
+    """Odd temporal averaging kernel used to smooth G1 history noise."""
+
+    history_shift_prob: float = 0.2
+    """Probability of temporally shifting the unprotected portion of G1 state history."""
+
+    history_shift_max_frames: int = 2
+    """Maximum absolute number of frames used for the G1 history shift."""
+
+    history_shift_protect_last: int = 5
+    """Number of most recent G1 state frames excluded from temporal shifting."""
+
     # --- Data Augmentation ---
     random_rotation_angle: int | None = None
     """Maximum rotation angle (in degrees) for random rotation augmentation of input images."""
