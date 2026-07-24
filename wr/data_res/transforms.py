@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import numpy as np
 from scipy.spatial.transform import Rotation, Slerp
 
@@ -390,7 +392,7 @@ def mocap_to_root_relative(data: np.ndarray) -> np.ndarray:
 def restore_mocap_from_root_relative(
     mocap_root_rel: np.ndarray,
     init_root_xyz: np.ndarray | None = None,
-) -> np.ndarray:
+) -> tuple[np.ndarray, np.ndarray]:
     """
     Restore [root_delta_xyz, root-relative 11x9 mocap] to absolute 11x9 mocap.
 
@@ -429,7 +431,11 @@ def restore_mocap_from_root_relative(
         root_xyz[0] = init_root_xyz
     if num_frames > 1:
         root_xyz[1:] = init_root_xyz[None, :] + np.cumsum(root_delta[:-1], axis=0)
-    next_init_root_xyz = root_xyz[-1] + root_delta[-1]
+    next_init_root_xyz = (
+        root_xyz[-1] + root_delta[-1]
+        if num_frames > 0
+        else init_root_xyz.copy()
+    )
 
     mocap_data[:, :, :3] = mocap_data[:, :, :3] + root_xyz[:, None, :]
     return mocap_data, next_init_root_xyz

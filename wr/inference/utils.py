@@ -15,6 +15,7 @@ from data_res.dds import (
     MOCAP_POS_DIM,
     MOCAP_QUAT_DIM,
     WR_GAE_BodyPose_Msg,
+    WR_GAE_BodyPose_Msg_V2,
 )
 from data_res.log import get_logger
 from data_res.transforms import (

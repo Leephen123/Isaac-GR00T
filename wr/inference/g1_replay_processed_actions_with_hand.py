@@ -23,9 +23,8 @@ from data_res.dds import (
 from data_res.log import get_logger
 from data_res.transforms import (
     compute_absolute,
-    compute_relative,
     normalize_quaternion,
-    restore_mocap_from_root_relative_delta,
+    restore_mocap_from_root_relative,
     rotation_6d_to_quaternion,
 )
 from data_res.utils import SELECT_11_INDICES
@@ -78,8 +77,7 @@ def model_action_to_abs_action(
     action_output: np.ndarray,
     init_pose: np.ndarray,
     root_rel_cum: np.ndarray,
-    joint_rel_cum: np.ndarray,
-) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     action_output = np.asarray(action_output, dtype=np.float32)
     logger.info("action output shape: %s", action_output.shape)
 
@@ -95,12 +93,9 @@ def model_action_to_abs_action(
     ).reshape(-1, 99)
     action_mocap = np.concatenate([root_delta, action_mocap], axis=-1)
 
-    action_11x9, root_rel_cum, joint_rel_cum = (
-        restore_mocap_from_root_relative_delta(
-            action_mocap,
-            root_rel_cum,
-            joint_rel_cum,
-        )
+    action_11x9, root_rel_cum = restore_mocap_from_root_relative(
+        action_mocap,
+        root_rel_cum,
     )
 
     num_frames = action_11x9.shape[0]
@@ -125,7 +120,7 @@ def model_action_to_abs_action(
         action_15x7_flat,
     ).reshape(num_frames, num_joints, num_poses)
 
-    return ans, root_rel_cum, joint_rel_cum, action_hand
+    return ans, root_rel_cum, action_hand
 
 
 if __name__ == "__main__":
@@ -202,21 +197,7 @@ if __name__ == "__main__":
     sleep(1)
 
     print(f"root_pose: {root_pose}")
-    relative_reference_pose = root_pose.copy()
     root_pose[2] = 1.0
-
-    pose15 = body_pose.get_15_pose7()
-    if pose15 is None:
-        raise RuntimeError("Failed to receive the initial 15-point body pose")
-
-    root_tiled = np.repeat(
-        relative_reference_pose[None, :],
-        MOCAP_NUM_JOINTS,
-        axis=0,
-    )
-    pose15_rel = compute_relative(root_tiled, pose15)
-    joint_rel_cum = pose15_rel[SELECT_11_INDICES, :3].astype(np.float32)
-    joint_rel_cum[0] = 0.0
 
     try:
         root_rel_cum = np.zeros(3, dtype=np.float32)
@@ -235,13 +216,11 @@ if __name__ == "__main__":
             (
                 action_chunk_abs,
                 root_rel_cum,
-                joint_rel_cum,
                 action_hand,
             ) = model_action_to_abs_action(
                 action_chunk_rel,
                 root_pose,
                 root_rel_cum,
-                joint_rel_cum,
             )
 
             for t in range(action_chunk_abs.shape[0]):

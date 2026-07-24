@@ -23,9 +23,9 @@ if str(WR_ROOT) not in sys.path:
 from data_res.transforms import (  # noqa: E402
     compute_absolute,
     compute_relative,
-    mocap_to_root_relative_delta,
+    mocap_to_root_relative,
     quaternion_to_rotation_6d,
-    restore_mocap_from_root_relative_delta,
+    restore_mocap_from_root_relative,
     rotation_6d_to_quaternion,
 )
 
@@ -76,22 +76,19 @@ def select_runtime_action(processed_mocap: np.ndarray) -> np.ndarray:
 def restore_in_chunks(
     action_102: np.ndarray,
     init_root_xyz: np.ndarray,
-    init_joint_relative_xyz: np.ndarray,
     chunk_size: int,
-) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+) -> tuple[np.ndarray, np.ndarray]:
     restored_chunks = []
     root_cumulative = np.asarray(init_root_xyz, dtype=action_102.dtype).copy()
-    joint_cumulative = np.asarray(init_joint_relative_xyz, dtype=action_102.dtype).copy()
 
     for start in range(0, len(action_102), chunk_size):
-        restored, root_cumulative, joint_cumulative = restore_mocap_from_root_relative_delta(
+        restored, root_cumulative = restore_mocap_from_root_relative(
             action_102[start : start + chunk_size],
             root_cumulative,
-            joint_cumulative,
         )
         restored_chunks.append(restored)
 
-    return np.concatenate(restored_chunks, axis=0), root_cumulative, joint_cumulative
+    return np.concatenate(restored_chunks, axis=0), root_cumulative
 
 
 def relative_to_world(restored_11x9: np.ndarray, reference_root_pose7: np.ndarray) -> np.ndarray:
@@ -141,7 +138,7 @@ def main() -> None:
 
     standardized_pose7 = standardize_mocap(raw_mocap)
     standardized_pose9 = quaternion_to_rotation_6d(standardized_pose7)
-    reproduced_processed = mocap_to_root_relative_delta(standardized_pose9)
+    reproduced_processed = mocap_to_root_relative(standardized_pose9)
     preprocess_abs_error = np.abs(reproduced_processed - processed_mocap)
 
     # Realtime model_action_to_abs_action converts the server response to float32.
@@ -149,21 +146,14 @@ def main() -> None:
     reference_11x7 = raw_mocap[:, SELECT_11_INDICES]
     reference_standardized_11x9 = standardized_pose9[:, SELECT_11_INDICES]
     init_root_xyz = standardized_pose9[0, 0, :3].astype(np.float32)
-    init_joint_relative_xyz = (
-        standardized_pose9[0, SELECT_11_INDICES, :3] - standardized_pose9[0, 0, :3]
-    ).astype(np.float32)
-    # The root point is root-relative by definition and must never receive a second offset.
-    init_joint_relative_xyz[0] = 0.0
 
-    restored_whole, _, _ = restore_mocap_from_root_relative_delta(
+    restored_whole, _ = restore_mocap_from_root_relative(
         action_102,
         init_root_xyz,
-        init_joint_relative_xyz,
     )
-    restored_chunked, final_root, final_joints = restore_in_chunks(
+    restored_chunked, final_root = restore_in_chunks(
         action_102,
         init_root_xyz,
-        init_joint_relative_xyz,
         args.chunk_size,
     )
 
@@ -197,7 +187,6 @@ def main() -> None:
         "raw_initial_root_z": float(raw_mocap[0, 0, 2]),
         "runtime_root_z_offset": float(1.0 - raw_mocap[0, 0, 2]),
         "final_continuation_root_xyz": final_root.tolist(),
-        "final_continuation_joint_relative_xyz": final_joints.tolist(),
     }
 
     if args.output is not None:

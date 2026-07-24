@@ -4,7 +4,7 @@ import threading
 from collections import deque
 from dataclasses import dataclass, field
 from pathlib import Path
-from time import sleep
+from time import monotonic, sleep
 
 import numpy as np
 import tyro
@@ -41,7 +41,6 @@ from data_res.utils import (
     SELECT_11_INDICES,
     get_camera_name,
     standardize_imu,
-    load_mocap_imu_data
 )
 from serve_res.gr00t import server_client
 
@@ -116,9 +115,6 @@ class ClientConfig:
     timeout_ms: int = 15000  # 15s
     task_description: str = (
         "pick up the water to bowl and kitchen sink"
-    )
-    replay_data_path: Path = Path(
-        "/home/unitree/mpz/0610/wr_new/data/data.npy"
     )
     camera_fps: float = 20.0
     send_fps: float = 80
@@ -412,6 +408,12 @@ def wait_for_hand_state_msg(
 
 if __name__ == "__main__":
     config = tyro.cli(ClientConfig)
+    if config.send_fps <= 0:
+        raise ValueError(f"send_fps must be positive, got {config.send_fps}")
+    if config.action_chunk_size <= 0:
+        raise ValueError(
+            f"action_chunk_size must be positive, got {config.action_chunk_size}"
+        )
     if config.num_interp < 0:
         raise ValueError(f"num_interp must be non-negative, got {config.num_interp}")
     state_sample_every = config.num_interp + 1 if config.use_interpolate else 1
@@ -437,9 +439,11 @@ if __name__ == "__main__":
     camera_caps = {name: VideoCapture(name) for name in camera_name_list}
     camera_grabber = CameraGrabber(camera_caps)
     camera_grabber.start()
+    camera_grabber.wait_until_ready()
     hand_subscriber = MocapUEHandSubscriber()
     hand_publisher = MocapUEHandPublisher()
-    body_publisher = MocapUE5G115MsgPublisher(mocap_cfg, fps)
+    body_publisher = MocapUE5G115MsgPublisher(config.mocap_cfg, config.send_fps)
+    send_rate = RateLimiter(frequency=config.send_fps)
 
     while True:
         root_pose = body_pose.get_root_pose()
@@ -447,37 +451,6 @@ if __name__ == "__main__":
             print("root pose received!")
             break
         sleep(0.01)
-
-
-    replay_data = load_mocap_imu_data(config.replay_data_path)
-    # _MOCAP_POSE_DIM = _MOCAP_POS_DIM + _MOCAP_QUAT_DIM
-    # assert replay_data.ndim == 3, (
-    #     f"Expected (T, {_MOCAP_NUM_JOINTS}, {_MOCAP_POSE_DIM}), got {replay_data.shape}"
-    # )
-    # assert replay_data.shape[1] == _MOCAP_NUM_JOINTS, (
-    #     f"Expected {_MOCAP_NUM_JOINTS} joints, got {replay_data.shape}"
-    # )
-    # assert replay_data.shape[2] == _MOCAP_POSE_DIM, (
-    #     f"Expected pose dim {_MOCAP_POSE_DIM}, got {replay_data.shape}"
-    # )
-    logger.info(f"The replay episode length is: {replay_data.shape[0]}")
-
-    replay_data_init = replay_data[0:1, :, :].copy()
-    num_frames, num_joints, poses = replay_data_init.shape
-    root_pose_tiled = np.tile(root_pose, (num_frames * num_joints, 1))
-    replay_data_init_flat = replay_data_init.reshape(num_frames * num_joints, -1)
-    replay_data_init = compute_absolute(root_pose_tiled, replay_data_init_flat)
-    replay_data_init = replay_data_init.reshape(num_frames, num_joints, poses)[0]
-
-
-    # replay_data_init = replay_data[0, :, :].copy()
-
-    print(f"replay_data_init: {replay_data_init.shape}")
-
-
-    body_publisher.send_msg(xyz=replay_data_init[:, 0:3], wxyz=replay_data_init[:, 3:7])
-    hand_publisher.send([0]*12)
-
 
     logger.info("MocapSender thread started.")
     sleep(1)
@@ -515,7 +488,16 @@ if __name__ == "__main__":
                 frame=frame,
             )
 
-            action_chunk_rel = client.get_action(observation)[0]["mocap"][0]
+            action_chunk_rel = np.asarray(
+                client.get_action(observation)[0]["mocap"][0],
+                dtype=np.float32,
+            ).reshape(-1, 114)
+            if action_chunk_rel.shape[0] < config.action_chunk_size:
+                raise ValueError(
+                    "Model returned fewer action steps than requested: "
+                    f"{action_chunk_rel.shape[0]} < {config.action_chunk_size}"
+                )
+            action_chunk_rel = action_chunk_rel[: config.action_chunk_size]
             # ret = client.get_action(observation)[0]
             # action_chunk_rel = np.concatenate((ret["root_delta"][0], ret["mocap_xyz"][0], ret["mocap_rot6d"][0]), axis=-1).reshape(-1)
             action_chunk_abs, root_rel_cum, action_hand = model_action_to_abs_action(
@@ -531,9 +513,9 @@ if __name__ == "__main__":
                 
             if config.use_interpolate:
                 action_chunk_abs = interpolate_pose7(
-                    action_chunk_abs[:30], config.num_interp
+                    action_chunk_abs, config.num_interp
                 )
-                action_hand = interpolate_hand_joint(action_hand[:30], config.num_interp)
+                action_hand = interpolate_hand_joint(action_hand, config.num_interp)
 
             if last_action is not None:
                 action_chunk_abs = action_chunk_abs[1:]
@@ -559,6 +541,7 @@ if __name__ == "__main__":
                     if hist_msg is not None and hist_hand is not None:
                         state_history_queue.put(hist_msg, hist_hand)
                     global_state_sample_every = 0
+                send_rate.sleep()
    
             last_action = action_chunk_abs[-1:]
             last_hand_action = action_hand[-1:]
@@ -566,6 +549,7 @@ if __name__ == "__main__":
     except KeyboardInterrupt:
         logger.info("Stopped by user.")
     finally:
+        camera_grabber.stop()
         for camera_cap in camera_caps.values():
             camera_cap.release()
         logger.info("Sender thread stopped.")

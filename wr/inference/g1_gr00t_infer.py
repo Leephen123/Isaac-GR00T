@@ -198,7 +198,12 @@ if __name__ == "__main__":
             for name, camera_cap in camera_caps.items():
                 frame[name] = camera_cap.read()
 
-            observation = build_observation_from_msg(msg, config.task_description, frame, use_stickman)
+            observation = build_observation_from_msg(
+                msg,
+                config.task_description,
+                frame,
+                config.use_stickman,
+            )
             action_11x9 = client.get_action(observation)[0]
             num_frames, num_poses = action_11x9.shape
             action_11x9 = action_11x9.reshape(num_frames, 11, 9)

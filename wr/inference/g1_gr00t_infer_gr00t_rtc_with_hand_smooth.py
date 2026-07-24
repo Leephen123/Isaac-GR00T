@@ -32,7 +32,6 @@ from data_res.log import get_logger
 from data_res.transforms import (
     compute_absolute,
     compute_imu_relative,
-    compute_relative,
     interpolate_pose7,
     normalize_quaternion,
     quaternion_to_rotation_6d,
@@ -625,10 +624,9 @@ class Gr00tRtcV2Runner:
         self.main_client = None
         self.worker = AsyncInferenceWorker(self._infer_once, config)
 
-        self.action_horizon = 30
+        self.action_horizon = 50
         self.root_pose: np.ndarray | None = None
         self.root_rel_cum = np.zeros(3, dtype=np.float32)
-        self.joint_rel_cum = np.zeros((11, 3), dtype=np.float32)
         self.active: ActiveChunk | None = None
         self.pending_rtc_result: InferenceResult | None = None
         self.last_sent_pose: np.ndarray | None = None
@@ -682,17 +680,8 @@ class Gr00tRtcV2Runner:
                 print("root pose received!")
                 break
             sleep(0.01)
-        relative_reference_pose = self.root_pose.copy()
         if self.config.root_pose_z is not None:
             self.root_pose[2] = float(self.config.root_pose_z)
-        pose15 = self.body_pose.get_15_pose7()
-        if pose15 is None:
-            raise RuntimeError("Failed to receive the initial 15-point body pose")
-        root_tiled = np.repeat(
-            relative_reference_pose[None, :], MOCAP_NUM_JOINTS, axis=0
-        )
-        pose15_rel = compute_relative(root_tiled, pose15)
-        self.joint_rel_cum = pose15_rel[SELECT_11_INDICES, :3].astype(np.float32)
 
     def _tick(self) -> None:
         self._collect_async_result()
@@ -860,9 +849,6 @@ class Gr00tRtcV2Runner:
         if self.active is None:
             return
         self.root_rel_cum = self.active.current_root(self.interp_stride).copy()
-        self.joint_rel_cum = self.active.joint_relative_at_step(
-            self.active.executed_steps(self.interp_stride)
-        ).copy()
         logger.info(
             "finished chunk id=%d at step=%d",
             self.active.chunk_id,
@@ -1039,9 +1025,6 @@ class Gr00tRtcV2Runner:
         assert skipped_steps <= result.rtc_frozen_steps
 
         self.root_rel_cum = self.active.current_root(self.interp_stride).copy()
-        self.joint_rel_cum = self.active.joint_relative_at_step(
-            self.active.executed_steps(self.interp_stride)
-        ).copy()
         action_frame_offset = action_frame_offset_after_steps(
             skipped_steps,
             self.interp_stride,

@@ -31,11 +31,10 @@ from data_res.log import get_logger
 from data_res.transforms import (
     compute_absolute,
     compute_imu_relative,
-    compute_relative,
     interpolate_pose7,
     normalize_quaternion,
     quaternion_to_rotation_6d,
-    restore_mocap_from_root_relative_delta,
+    restore_mocap_from_root_relative,
     rotation_6d_to_quaternion,
     smooth_pose7_quat_sign,
 )
@@ -65,7 +64,7 @@ class ClientConfig:
     camera_fps: float = 20.0
     send_fps: float = 50
     history_len: int = 50
-    action_chunk_size: int = 30
+    action_chunk_size: int = 50
     # Frames inserted between adjacent policy actions inside a chunk.
     enable_intra_chunk_interp: bool = False
     intra_chunk_interp_num: int = 2
@@ -328,8 +327,7 @@ def model_action_to_abs_action(
     action_output: np.ndarray,
     init_pose: np.ndarray,
     root_rel_cum: np.ndarray,
-    joint_rel_cum: np.ndarray,
-) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     action_output = np.asarray(action_output, dtype=np.float32)
     logger.info("action output shape: %s", action_output.shape)
 
@@ -343,10 +341,9 @@ def model_action_to_abs_action(
     action_mocap = np.concatenate([action_mocap_xyz, action_mocap_6d], axis=-1).reshape(-1, 99)
     action_mocap = np.concatenate([root_delta, action_mocap], axis=-1)
 
-    action_11x9, root_rel_cum, joint_rel_cum = restore_mocap_from_root_relative_delta(
+    action_11x9, root_rel_cum = restore_mocap_from_root_relative(
         action_mocap,
         root_rel_cum,
-        joint_rel_cum,
     )
 
     num_frames = action_11x9.shape[0]
@@ -363,7 +360,7 @@ def model_action_to_abs_action(
     ans = compute_absolute(init_pose_x7_flat, action_15x7_flat).reshape(
         num_frames, num_joints, num_poses
     )
-    return ans, root_rel_cum, joint_rel_cum, action_hand
+    return ans, root_rel_cum, action_hand
 
 
 def interpolate_hand_joint(hand_joint_seq: np.ndarray, num_interp: int) -> np.ndarray:
@@ -646,6 +643,10 @@ if __name__ == "__main__":
         )
     if config.send_fps <= 0:
         raise ValueError(f"send_fps must be positive, got {config.send_fps}")
+    if config.action_chunk_size <= 0:
+        raise ValueError(
+            f"action_chunk_size must be positive, got {config.action_chunk_size}"
+        )
 
     client = server_client.PolicyClient(
         host=config.host,
@@ -728,16 +729,7 @@ if __name__ == "__main__":
     # )
     # root_pose = root_pose
     print(f"root_pose : {root_pose}")
-    relative_reference_pose = root_pose.copy()
     root_pose[2] = 1.0
-    pose15 = body_pose.get_15_pose7()
-    if pose15 is None:
-        raise RuntimeError("Failed to receive the initial 15-point body pose")
-    root_tiled = np.repeat(
-        relative_reference_pose[None, :], MOCAP_NUM_JOINTS, axis=0
-    )
-    pose15_rel = compute_relative(root_tiled, pose15)
-    joint_rel_cum = pose15_rel[SELECT_11_INDICES, :3].astype(np.float32)
 
 
     action_recorder = ExecutedActionRecorder(
@@ -761,14 +753,22 @@ if __name__ == "__main__":
                 frame=frame,
             )
 
-            action_chunk_rel = client.get_action(observation)[0]["mocap"][0]
+            action_chunk_rel = np.asarray(
+                client.get_action(observation)[0]["mocap"][0],
+                dtype=np.float32,
+            ).reshape(-1, 114)
+            if action_chunk_rel.shape[0] < config.action_chunk_size:
+                raise ValueError(
+                    "Model returned fewer action steps than requested: "
+                    f"{action_chunk_rel.shape[0]} < {config.action_chunk_size}"
+                )
+            action_chunk_rel = action_chunk_rel[: config.action_chunk_size]
             # ret = client.get_action(observation)[0]
             # action_chunk_rel = np.concatenate((ret["root_delta"][0], ret["mocap_xyz"][0], ret["mocap_rot6d"][0]), axis=-1).reshape(-1)
-            action_chunk_abs, root_rel_cum, joint_rel_cum, action_hand = model_action_to_abs_action(
+            action_chunk_abs, root_rel_cum, action_hand = model_action_to_abs_action(
                 action_chunk_rel,
                 root_pose,
                 root_rel_cum,
-                joint_rel_cum,
             )
 
             action_chunk_abs, action_hand, policy_step_mask = build_action_frames(
