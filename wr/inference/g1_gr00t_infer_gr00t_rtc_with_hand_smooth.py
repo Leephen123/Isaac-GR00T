@@ -36,7 +36,7 @@ from data_res.transforms import (
     interpolate_pose7,
     normalize_quaternion,
     quaternion_to_rotation_6d,
-    restore_mocap_from_root_relative_delta,
+    restore_mocap_from_root_relative,
     rotation_6d_to_quaternion,
     smooth_pose7_quat_sign,
 )
@@ -89,7 +89,6 @@ class InferenceResult:
     hands_abs: np.ndarray
     actions_rel: np.ndarray
     chunk_start_root_rel: np.ndarray
-    chunk_start_joint_rel: np.ndarray
     rtc_overlap_steps: int | None = None
     rtc_frozen_steps: int | None = None
     submit_action_frame_count: int | None = None
@@ -139,11 +138,6 @@ class ActiveChunk:
         action_step = max(0, min(action_step, self.result.actions_rel.shape[0]))
         root_delta = self.result.actions_rel[:action_step, :3].sum(axis=0)
         return self.result.chunk_start_root_rel + root_delta
-
-    def joint_relative_at_step(self, action_step: int) -> np.ndarray:
-        action_step = max(0, min(action_step, self.result.actions_rel.shape[0]))
-        joint_delta = self.result.actions_rel[:action_step, 3:36].reshape(-1, 11, 3)
-        return self.result.chunk_start_joint_rel + joint_delta.sum(axis=0)
 
     def current_root(self, interp_stride: int) -> np.ndarray:
         return self.root_at_step(self.executed_steps(interp_stride))
@@ -509,7 +503,6 @@ def model_action_to_abs_action(
     action_output: np.ndarray,
     init_pose: np.ndarray,
     chunk_start_root_rel: np.ndarray,
-    chunk_start_joint_rel: np.ndarray,
 ) -> tuple[np.ndarray, np.ndarray]:
     action_output = np.asarray(action_output, dtype=np.float32).reshape(-1, 114)
     if not np.isfinite(action_output).all():
@@ -527,10 +520,9 @@ def model_action_to_abs_action(
         axis=-1,
     ).reshape(-1, 99)
     action_mocap = np.concatenate([root_delta, action_mocap], axis=-1)
-    action_11x9, next_root_rel, next_joint_rel = restore_mocap_from_root_relative_delta(
+    action_11x9, next_root_rel = restore_mocap_from_root_relative(
         action_mocap,
         chunk_start_root_rel,
-        chunk_start_joint_rel,
     )
 
     num_frames = action_11x9.shape[0]
@@ -550,7 +542,6 @@ def model_action_to_abs_action(
     if (
         not np.isfinite(action_abs).all()
         or not np.isfinite(next_root_rel).all()
-        or not np.isfinite(next_joint_rel).all()
     ):
         raise ValueError("Restored mocap action contains non-finite values")
     return action_abs, action_hand
@@ -729,7 +720,6 @@ class Gr00tRtcV2Runner:
         result = self._infer_once(
             policy_client=self.main_client,
             chunk_start_root_rel=self.root_rel_cum,
-            chunk_start_joint_rel=self.joint_rel_cum,
             rtc_overlap_steps=None,
             rtc_frozen_steps=None,
             submit_action_frame_count=None,
@@ -742,7 +732,6 @@ class Gr00tRtcV2Runner:
         self,
         policy_client,
         chunk_start_root_rel: np.ndarray,
-        chunk_start_joint_rel: np.ndarray,
         rtc_overlap_steps: int | None,
         rtc_frozen_steps: int | None,
         submit_action_frame_count: int | None,
@@ -804,14 +793,12 @@ class Gr00tRtcV2Runner:
             actions_rel,
             self.root_pose,
             chunk_start_root_rel,
-            chunk_start_joint_rel,
         )
         return InferenceResult(
             actions_abs=actions_abs,
             hands_abs=hands_abs,
             actions_rel=actions_rel,
             chunk_start_root_rel=chunk_start_root_rel.copy(),
-            chunk_start_joint_rel=chunk_start_joint_rel.copy(),
             rtc_overlap_steps=rtc_overlap_steps,
             rtc_frozen_steps=rtc_frozen_steps,
             submit_action_frame_count=submit_action_frame_count,
@@ -953,11 +940,9 @@ class Gr00tRtcV2Runner:
             return
 
         chunk_start_root_rel = self.active.root_at_step(action_exec_s)
-        chunk_start_joint_rel = self.active.joint_relative_at_step(action_exec_s)
         submit_action_frame_count = self.sent_action_frame_count()
         ok = self.worker.submit(
             chunk_start_root_rel=chunk_start_root_rel,
-            chunk_start_joint_rel=chunk_start_joint_rel,
             rtc_overlap_steps=overlap_steps,
             rtc_frozen_steps=frozen_steps,
             submit_action_frame_count=submit_action_frame_count,
