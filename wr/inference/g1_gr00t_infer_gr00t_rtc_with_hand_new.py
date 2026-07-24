@@ -30,11 +30,10 @@ from data_res.log import get_logger
 from data_res.transforms import (
     compute_absolute,
     compute_imu_relative,
-    compute_relative,
     interpolate_pose7,
     normalize_quaternion,
     quaternion_to_rotation_6d,
-    restore_mocap_from_root_relative_delta,
+    restore_mocap_from_root_relative,
     rotation_6d_to_quaternion,
 )
 from data_res.utils import CAMERAS_MAP, SELECT_11_INDICES, get_camera_name
@@ -45,18 +44,15 @@ logger = get_logger(__name__)
 
 @dataclass
 class ClientConfig:
-    host: str = "192.168.123.163"
+    host: str = "192.168.123.165"
     port: int = 9002
     timeout_ms: int = 15000
     api_token: str | None = None
     task_description: str = (
-        "pick up the cube and bottle into the bowl"
+        "pick up the water to bowl and kitchen sink"
     )
-    send_fps: float = 50
+    send_fps: float = 70.0
     history_len: int = 50
-    # Physical action count decoded from each policy response and executed by DDS.
-    # It must match the server's --execution-horizon value.
-    action_horizon: int = 30
     # Retained for compatibility; background capture no longer flushes on inference.
     camera_flush_infer: int = 5
     camera_ready_timeout_s: float = 10.0
@@ -69,9 +65,9 @@ class ClientConfig:
     # Frames inserted between adjacent model actions inside each chunk.
     intra_chunk_interp_num: int = 1
     # Frames inserted between the previous chunk endpoint and the next chunk start.
-    inter_chunk_interp_num: int = 3
+    inter_chunk_interp_num: int = 1
     # Submit RTC inference when no more than this many policy steps remain.
-    rtc_submit_remaining_steps: int = 20
+    rtc_submit_remaining_steps: int = 45
     root_pose_z: float | None = 1.0
     mocap_cfg: MocapConfig = field(
         default_factory=lambda: MocapConfig(
@@ -92,7 +88,6 @@ class InferenceResult:
     hands_abs: np.ndarray
     actions_rel: np.ndarray
     chunk_start_root_rel: np.ndarray
-    chunk_start_joint_rel: np.ndarray
     rtc_overlap_steps: int | None = None
     rtc_frozen_steps: int | None = None
     submit_action_frame_count: int | None = None
@@ -142,11 +137,6 @@ class ActiveChunk:
         action_step = max(0, min(action_step, self.result.actions_rel.shape[0]))
         root_delta = self.result.actions_rel[:action_step, :3].sum(axis=0)
         return self.result.chunk_start_root_rel + root_delta
-
-    def joint_relative_at_step(self, action_step: int) -> np.ndarray:
-        action_step = max(0, min(action_step, self.result.actions_rel.shape[0]))
-        joint_delta = self.result.actions_rel[:action_step, 3:36].reshape(-1, 11, 3)
-        return self.result.chunk_start_joint_rel + joint_delta.sum(axis=0)
 
     def current_root(self, interp_stride: int) -> np.ndarray:
         return self.root_at_step(self.executed_steps(interp_stride))
@@ -489,7 +479,6 @@ def model_action_to_abs_action(
     action_output: np.ndarray,
     init_pose: np.ndarray,
     chunk_start_root_rel: np.ndarray,
-    chunk_start_joint_rel: np.ndarray,
 ) -> tuple[np.ndarray, np.ndarray]:
     action_output = np.asarray(action_output, dtype=np.float32).reshape(-1, 114)
     if not np.isfinite(action_output).all():
@@ -507,10 +496,9 @@ def model_action_to_abs_action(
         axis=-1,
     ).reshape(-1, 99)
     action_mocap = np.concatenate([root_delta, action_mocap], axis=-1)
-    action_11x9, next_root_rel, next_joint_rel = restore_mocap_from_root_relative_delta(
+    action_11x9, next_root_rel = restore_mocap_from_root_relative(
         action_mocap,
         chunk_start_root_rel,
-        chunk_start_joint_rel,
     )
 
     num_frames = action_11x9.shape[0]
@@ -527,11 +515,7 @@ def model_action_to_abs_action(
         num_joints,
         num_poses,
     )
-    if (
-        not np.isfinite(action_abs).all()
-        or not np.isfinite(next_root_rel).all()
-        or not np.isfinite(next_joint_rel).all()
-    ):
+    if not np.isfinite(action_abs).all() or not np.isfinite(next_root_rel).all():
         raise ValueError("Restored mocap action contains non-finite values")
     return action_abs, action_hand
 
@@ -584,15 +568,6 @@ def validate_config(config: ClientConfig) -> None:
             "rtc_submit_remaining_steps must be positive, "
             f"got {config.rtc_submit_remaining_steps}"
         )
-    if config.action_horizon <= 0:
-        raise ValueError(
-            f"action_horizon must be positive, got {config.action_horizon}"
-        )
-    if config.rtc_submit_remaining_steps > config.action_horizon:
-        raise ValueError(
-            "rtc_submit_remaining_steps cannot exceed action_horizon: "
-            f"{config.rtc_submit_remaining_steps} > {config.action_horizon}"
-        )
 
 
 def gr00t_rtc_inputs(
@@ -606,15 +581,10 @@ def gr00t_rtc_inputs(
             "GR00T RTC requires 0 <= frozen <= overlap <= action_horizon, "
             f"got frozen={frozen_steps}, overlap={overlap_steps}, H={action_horizon}"
         )
-    executed_steps = action_horizon - overlap_steps
     return {
         "rtc_overlap_steps": np.asarray(overlap_steps, dtype=np.int32),
         "rtc_frozen_steps": np.asarray(frozen_steps, dtype=np.int32),
         "rtc_ramp_rate": np.asarray(config.rtc_ramp_rate, dtype=np.float32),
-        # H_exec is independent of the checkpoint's model horizon and flattened
-        # training chunk. The policy uses it to select old[s:H_exec].
-        "rtc_executed_steps": np.asarray(executed_steps, dtype=np.int32),
-        "rtc_execution_horizon": np.asarray(action_horizon, dtype=np.int32),
     }
 
 
@@ -646,10 +616,9 @@ class Gr00tRtcV2Runner:
         self.main_client = None
         self.worker = AsyncInferenceWorker(self._infer_once, config)
 
-        self.action_horizon = config.action_horizon
+        self.action_horizon = 50
         self.root_pose: np.ndarray | None = None
         self.root_rel_cum = np.zeros(3, dtype=np.float32)
-        self.joint_rel_cum = np.zeros((11, 3), dtype=np.float32)
         self.active: ActiveChunk | None = None
         self.pending_rtc_result: InferenceResult | None = None
         self.last_sent_pose: np.ndarray | None = None
@@ -706,12 +675,6 @@ class Gr00tRtcV2Runner:
             sleep(0.01)
         if self.config.root_pose_z is not None:
             self.root_pose[2] = float(self.config.root_pose_z)
-        pose15 = self.body_pose.get_15_pose7()
-        if pose15 is None:
-            raise RuntimeError("Failed to receive the initial 15-point body pose")
-        root_tiled = np.repeat(self.root_pose[None, :], MOCAP_NUM_JOINTS, axis=0)
-        pose15_rel = compute_relative(root_tiled, pose15)
-        self.joint_rel_cum = pose15_rel[SELECT_11_INDICES, :3].astype(np.float32)
 
     def _shutdown_cameras(self) -> None:
         if self.camera_grabber is not None:
@@ -747,7 +710,6 @@ class Gr00tRtcV2Runner:
         result = self._infer_once(
             policy_client=self.main_client,
             chunk_start_root_rel=self.root_rel_cum,
-            chunk_start_joint_rel=self.joint_rel_cum,
             rtc_overlap_steps=None,
             rtc_frozen_steps=None,
             submit_action_frame_count=None,
@@ -760,7 +722,6 @@ class Gr00tRtcV2Runner:
         self,
         policy_client,
         chunk_start_root_rel: np.ndarray,
-        chunk_start_joint_rel: np.ndarray,
         rtc_overlap_steps: int | None,
         rtc_frozen_steps: int | None,
         submit_action_frame_count: int | None,
@@ -848,14 +809,12 @@ class Gr00tRtcV2Runner:
             actions_rel,
             self.root_pose,
             chunk_start_root_rel,
-            chunk_start_joint_rel,
         )
         return InferenceResult(
             actions_abs=actions_abs,
             hands_abs=hands_abs,
             actions_rel=actions_rel,
             chunk_start_root_rel=chunk_start_root_rel.copy(),
-            chunk_start_joint_rel=chunk_start_joint_rel.copy(),
             rtc_overlap_steps=rtc_overlap_steps,
             rtc_frozen_steps=rtc_frozen_steps,
             submit_action_frame_count=submit_action_frame_count,
@@ -909,9 +868,6 @@ class Gr00tRtcV2Runner:
         if self.active is None:
             return
         self.root_rel_cum = self.active.current_root(self.interp_stride).copy()
-        self.joint_rel_cum = self.active.joint_relative_at_step(
-            self.active.executed_steps(self.interp_stride)
-        ).copy()
         logger.info(
             "finished chunk id=%d at step=%d",
             self.active.chunk_id,
@@ -982,11 +938,9 @@ class Gr00tRtcV2Runner:
             return
 
         chunk_start_root_rel = self.active.root_at_step(action_exec_s)
-        chunk_start_joint_rel = self.active.joint_relative_at_step(action_exec_s)
         submit_action_frame_count = self.sent_action_frame_count()
         ok = self.worker.submit(
             chunk_start_root_rel=chunk_start_root_rel,
-            chunk_start_joint_rel=chunk_start_joint_rel,
             rtc_overlap_steps=overlap_steps,
             rtc_frozen_steps=frozen_steps,
             submit_action_frame_count=submit_action_frame_count,
@@ -1046,30 +1000,6 @@ class Gr00tRtcV2Runner:
             self.pending_rtc_result = None
             return False
 
-        frozen_steps = result.rtc_frozen_steps
-        if frozen_steps > 0:
-            source_start = self.action_horizon - result.rtc_overlap_steps
-            expected_frozen = self.active.result.actions_rel[
-                source_start : source_start + frozen_steps
-            ]
-            actual_frozen = result.actions_rel[:frozen_steps]
-            if not np.allclose(
-                actual_frozen,
-                expected_frozen,
-                rtol=1e-4,
-                atol=1e-4,
-            ):
-                max_error = float(np.max(np.abs(actual_frozen - expected_frozen)))
-                logger.error(
-                    "discard GR00T RTC result with discontinuous frozen prefix: "
-                    "source_start=%d, frozen=%d, max_abs_error=%.6f",
-                    source_start,
-                    frozen_steps,
-                    max_error,
-                )
-                self.pending_rtc_result = None
-                return False
-
         elapsed_frames = (
             self.sent_action_frame_count() - result.submit_action_frame_count
         )
@@ -1107,9 +1037,6 @@ class Gr00tRtcV2Runner:
         assert skipped_steps <= result.rtc_frozen_steps
 
         self.root_rel_cum = self.active.current_root(self.interp_stride).copy()
-        self.joint_rel_cum = self.active.joint_relative_at_step(
-            self.active.executed_steps(self.interp_stride)
-        ).copy()
         action_frame_offset = action_frame_offset_after_steps(
             skipped_steps,
             self.interp_stride,

@@ -426,7 +426,7 @@ def build_observation_from_msg(
     task_description: str,
     frame=None,
     use_stickman: bool = False,
-    debug: bool = False,
+    debug: bool = True,
 ):
     q_np = np.array(msg.q, dtype=np.float32)
     imu_np = np.array(msg.wxyz, dtype=np.float32)

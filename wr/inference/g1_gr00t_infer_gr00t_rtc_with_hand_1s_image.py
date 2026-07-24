@@ -16,7 +16,7 @@ root_path = Path(__file__).parent.parent
 sys.path.append(str(root_path))
 sys.path.append(os.getcwd())
 
-from wr.data_res.camera_old import VideoCapture, CameraGrabber
+from data_res.camera import VideoCapture
 from data_res.dds import (
     MOCAP_NUM_JOINTS,
     MOCAP_POS_DIM,
@@ -48,25 +48,25 @@ logger = get_logger(__name__)
 @dataclass
 class ClientConfig:
     host: str = "192.168.123.165"
-    port: int = 9003
+    port: int = 9002
     timeout_ms: int = 15000
     api_token: str | None = None
     task_description: str = (
-        "pick up the cube and bottle into the bowl"
+        "pick up the water to bowl and kitchen sink"
     )
-    send_fps: float = 50.0
+    send_fps: float = 70.0
     history_len: int = 50
     model_step_fps: float = 50.0
     camera_fps: float = 20.0
     image_history_indices: tuple[int, ...] = (-20, -10, 0)
     camera_flush_infer: int = 5
-    rtc_init_delay_steps: int = 7
+    rtc_init_delay_steps: int = 5
     rtc_delay_buffer_len: int = 3
     rtc_ramp_rate: float = 1.0
     fallback_sync_on_async_error: bool = True
-    enable_action_interp: bool = False
+    enable_action_interp: bool = True
     interp_num: int = 1
-    rtc_submit_remaining_frames: int = 35
+    rtc_submit_remaining_frames: int = 45
     root_pose_z: float | None = 1.0
     mocap_cfg: MocapConfig = field(
         default_factory=lambda: MocapConfig(
@@ -564,7 +564,7 @@ class Gr00tRtcV2Runner:
         self.rate = RateLimiter(frequency=config.send_fps)
 
         self.body_pose = BodyPoseSubscriberV3(config.body_pose_cfg)
-        self.publisher = MocapUE5G115MsgPublisher(config.mocap_cfg, fps=config.send_fps)
+        self.publisher = MocapUE5G115MsgPublisher(config.mocap_cfg)
         self.hand_subscriber = MocapUEHandSubscriber()
         self.hand_publisher = MocapUEHandPublisher()
         self.history = StateHistoryQueue(maxlen=config.history_len)
@@ -575,7 +575,6 @@ class Gr00tRtcV2Runner:
         )
 
         self.camera_caps: dict[str, VideoCapture] = {}
-        self.camera_grabber: CameraGrabber | None = None
         self.main_client = None
         self.worker = AsyncInferenceWorker(self._infer_once, config)
 
@@ -600,20 +599,13 @@ class Gr00tRtcV2Runner:
                 self._tick()
         except KeyboardInterrupt:
             logger.info("Stopped by user.")
-        finally:
-            if self.camera_grabber is not None:
-                self.camera_grabber.stop()
-            for camera_cap in self.camera_caps.values():
-                camera_cap.release()
 
     def _initialize(self) -> None:
         self.camera_caps = {
             name: VideoCapture(name)
             for name in get_camera_name(self.config.camera_config)
         }
-        self.camera_grabber = CameraGrabber(self.camera_caps)
-        self.camera_grabber.start()
-        self.camera_grabber.wait_until_ready()
+        sleep(2)
 
         self.main_client = server_client.PolicyClient(
             host=self.config.host,
@@ -808,7 +800,7 @@ class Gr00tRtcV2Runner:
 
         mocap_frame, hand_frame = self.active.next_frame()
         xyz, wxyz = split_xyz_wxyz(mocap_frame)
-        self.publisher.send_msg(xyz=xyz, wxyz=wxyz)
+        self.publisher.send_msg(fps=self.config.send_fps, xyz=xyz, wxyz=wxyz)
         self.hand_publisher.send(hand_frame)
         is_action_frame = self.active.mark_sent()
         self.last_sent_pose = mocap_frame.copy()
@@ -998,9 +990,10 @@ class Gr00tRtcV2Runner:
             if self._image_sample_acc < 1.0:
                 return
             self._image_sample_acc -= 1.0
-        if self.camera_grabber is None:
-            raise RuntimeError("camera_grabber is not initialized")
-        frame = self.camera_grabber.get_frames()
+        frame = read_camera_frames(
+            self.camera_caps,
+            flush_count=self.config.camera_flush_infer if force else 1,
+        )
         self.image_history.put(frame)
 
     def _sample_history(self) -> None:

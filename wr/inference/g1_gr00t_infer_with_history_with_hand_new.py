@@ -4,13 +4,13 @@ import threading
 from collections import deque
 from dataclasses import dataclass, field
 from pathlib import Path
-from time import sleep
+from time import monotonic, sleep
 
 import numpy as np
 import tyro
 from loop_rate_limiters import RateLimiter
-from PIL import Image, ImageDraw, ImageFont
-import sys
+from PIL import Image
+
 sys.path.append("/home/unitree/liyifan/wr/")
 from data_res.camera import VideoCapture
 from data_res.dds import (
@@ -40,12 +40,12 @@ from data_res.utils import (
     CAMERAS_MAP,
     SELECT_11_INDICES,
     get_camera_name,
-    standardize_imu,
     load_mocap_imu_data
 )
 from serve_res.gr00t import server_client
 
 logger = get_logger(__name__)
+HAND_ACTION_DIM = 12
 
 class CameraGrabber:
     """Background reader that always exposes the latest frame for each camera."""
@@ -123,8 +123,12 @@ class ClientConfig:
     camera_fps: float = 20.0
     send_fps: float = 80
     history_len: int = 50
+    # Maximum raw action steps executed per inference; 0 uses all returned steps.
     action_chunk_size: int = 50
-    num_interp: int = 1
+    # Frames inserted between adjacent raw actions inside the current chunk.
+    intra_chunk_interp_num: int = 1
+    # Frames inserted between the previous chunk endpoint and current first action.
+    inter_chunk_interp_num: int = 1
     use_interpolate: bool = True
     roll_out: int = 5000
     mocap_cfg: MocapConfig = field(
@@ -371,7 +375,7 @@ def model_action_to_abs_action(
 
 def interpolate_hand_joint(hand_joint_seq: np.ndarray, num_interp: int) -> np.ndarray:
     hand_joint_seq = np.asarray(hand_joint_seq, dtype=np.float32)
-    if hand_joint_seq.ndim != 2 or hand_joint_seq.shape[1] != 12:
+    if hand_joint_seq.ndim != 2 or hand_joint_seq.shape[1] != HAND_ACTION_DIM:
         raise ValueError(f"Expected hand joint shape (T, 12), got {hand_joint_seq.shape}")
     if hand_joint_seq.shape[0] <= 1 or num_interp <= 0:
         return hand_joint_seq
@@ -382,8 +386,146 @@ def interpolate_hand_joint(hand_joint_seq: np.ndarray, num_interp: int) -> np.nd
         + steps[None, :, None] * hand_joint_seq[1:, None, :]
     )
     return np.concatenate(
-        [interpolated.reshape(-1, 12), hand_joint_seq[-1:]], axis=0
+        [interpolated.reshape(-1, HAND_ACTION_DIM), hand_joint_seq[-1:]], axis=0
     )
+
+
+def get_action_exec_size(
+    model_action_steps: int,
+    action_chunk_size: int,
+) -> int:
+    if model_action_steps <= 0:
+        raise ValueError("Model returned an empty action chunk")
+    if action_chunk_size < 0:
+        raise ValueError(
+            f"action_chunk_size must be non-negative, got {action_chunk_size}"
+        )
+
+    if action_chunk_size == 0:
+        return model_action_steps
+    if model_action_steps < action_chunk_size:
+        logger.warning(
+            "Model returned %d action steps, smaller than action_chunk_size=%d; "
+            "using the available steps.",
+            model_action_steps,
+            action_chunk_size,
+        )
+    return min(action_chunk_size, model_action_steps)
+
+
+def build_action_frames(
+    prev_last_pose7: np.ndarray | None,
+    prev_last_hand: np.ndarray | None,
+    cur_chunk_pose7: np.ndarray,
+    cur_chunk_hand: np.ndarray,
+    enable_interp: bool,
+    intra_chunk_interp_num: int,
+    inter_chunk_interp_num: int,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Build synchronized mocap/hand frames with separate interpolation counts.
+
+    Intra-chunk interpolation is applied only between adjacent raw actions in the
+    current chunk. Inter-chunk interpolation adds only the intermediate bridge
+    frames between the previously executed endpoint and the current first action,
+    so neither boundary endpoint is sent twice. The returned history-sample mask
+    is true only for model-produced raw actions and false for every inserted frame.
+    """
+    if intra_chunk_interp_num < 0:
+        raise ValueError(
+            "intra_chunk_interp_num must be non-negative, "
+            f"got {intra_chunk_interp_num}"
+        )
+    if inter_chunk_interp_num < 0:
+        raise ValueError(
+            "inter_chunk_interp_num must be non-negative, "
+            f"got {inter_chunk_interp_num}"
+        )
+    if (prev_last_pose7 is None) != (prev_last_hand is None):
+        raise ValueError(
+            "prev_last_pose7 and prev_last_hand must both be provided or both be None"
+        )
+
+    cur_chunk_pose7 = np.asarray(cur_chunk_pose7, dtype=np.float32)
+    cur_chunk_hand = np.asarray(cur_chunk_hand, dtype=np.float32)
+    if cur_chunk_pose7.ndim != 3 or cur_chunk_pose7.shape[1:] != (15, 7):
+        raise ValueError(
+            f"Expected cur_chunk_pose7 shape (T, 15, 7), got {cur_chunk_pose7.shape}"
+        )
+    if cur_chunk_hand.ndim != 2 or cur_chunk_hand.shape[1] != HAND_ACTION_DIM:
+        raise ValueError(
+            f"Expected cur_chunk_hand shape (T, {HAND_ACTION_DIM}), "
+            f"got {cur_chunk_hand.shape}"
+        )
+    if cur_chunk_pose7.shape[0] == 0:
+        raise ValueError("Cannot execute an empty action chunk")
+    if cur_chunk_pose7.shape[0] != cur_chunk_hand.shape[0]:
+        raise ValueError(
+            "Mocap and hand action lengths do not match before interpolation: "
+            f"{cur_chunk_pose7.shape[0]} vs {cur_chunk_hand.shape[0]}"
+        )
+
+    prev_pose = None
+    prev_hand = None
+    if prev_last_pose7 is not None and prev_last_hand is not None:
+        prev_pose = np.asarray(prev_last_pose7, dtype=np.float32)
+        prev_hand = np.asarray(prev_last_hand, dtype=np.float32)
+        if prev_pose.shape != (15, 7):
+            raise ValueError(f"Expected prev_last_pose7 shape (15, 7), got {prev_pose.shape}")
+        if prev_hand.shape != (HAND_ACTION_DIM,):
+            raise ValueError(
+                f"Expected prev_last_hand shape ({HAND_ACTION_DIM},), got {prev_hand.shape}"
+            )
+        smoothed_pose = smooth_pose7_quat_sign(
+            np.concatenate([prev_pose[None, ...], cur_chunk_pose7], axis=0)
+        )
+        prev_pose = smoothed_pose[0]
+        cur_chunk_pose7 = smoothed_pose[1:]
+    else:
+        cur_chunk_pose7 = smooth_pose7_quat_sign(cur_chunk_pose7)
+
+    pose_parts = []
+    hand_parts = []
+    history_sample_mask_parts = []
+    if enable_interp and inter_chunk_interp_num > 0 and prev_pose is not None:
+        bridge_pose = interpolate_pose7(
+            np.stack([prev_pose, cur_chunk_pose7[0]], axis=0),
+            inter_chunk_interp_num,
+        )
+        bridge_hand = interpolate_hand_joint(
+            np.stack([prev_hand, cur_chunk_hand[0]], axis=0),
+            inter_chunk_interp_num,
+        )
+        pose_parts.append(bridge_pose[1:-1])
+        hand_parts.append(bridge_hand[1:-1])
+        history_sample_mask_parts.append(
+            np.zeros(inter_chunk_interp_num, dtype=bool)
+        )
+
+    if enable_interp and intra_chunk_interp_num > 0:
+        chunk_pose = interpolate_pose7(cur_chunk_pose7, intra_chunk_interp_num)
+        chunk_hand = interpolate_hand_joint(cur_chunk_hand, intra_chunk_interp_num)
+        chunk_history_sample_mask = np.zeros(chunk_pose.shape[0], dtype=bool)
+        chunk_history_sample_mask[::intra_chunk_interp_num + 1] = True
+    else:
+        chunk_pose = cur_chunk_pose7
+        chunk_hand = cur_chunk_hand
+        chunk_history_sample_mask = np.ones(cur_chunk_pose7.shape[0], dtype=bool)
+
+    pose_parts.append(chunk_pose)
+    hand_parts.append(chunk_hand)
+    history_sample_mask_parts.append(chunk_history_sample_mask)
+    action_frames = np.concatenate(pose_parts, axis=0).astype(np.float32)
+    hand_frames = np.concatenate(hand_parts, axis=0).astype(np.float32)
+    history_sample_mask = np.concatenate(history_sample_mask_parts, axis=0)
+
+    logger.info(
+        "action frames: raw_steps=%d, inter_interp=%d, intra_interp=%d, send_frames=%d",
+        cur_chunk_pose7.shape[0],
+        inter_chunk_interp_num if enable_interp and prev_pose is not None else 0,
+        intra_chunk_interp_num if enable_interp else 0,
+        action_frames.shape[0],
+    )
+    return action_frames, hand_frames, history_sample_mask
 
 
 def wait_for_body_pose_msg(
@@ -412,10 +554,22 @@ def wait_for_hand_state_msg(
 
 if __name__ == "__main__":
     config = tyro.cli(ClientConfig)
-    if config.num_interp < 0:
-        raise ValueError(f"num_interp must be non-negative, got {config.num_interp}")
-    state_sample_every = config.num_interp + 1 if config.use_interpolate else 1
-
+    if config.send_fps <= 0:
+        raise ValueError(f"send_fps must be positive, got {config.send_fps}")
+    if config.action_chunk_size < 0:
+        raise ValueError(
+            f"action_chunk_size must be non-negative, got {config.action_chunk_size}"
+        )
+    if config.intra_chunk_interp_num < 0:
+        raise ValueError(
+            "intra_chunk_interp_num must be non-negative, "
+            f"got {config.intra_chunk_interp_num}"
+        )
+    if config.inter_chunk_interp_num < 0:
+        raise ValueError(
+            "inter_chunk_interp_num must be non-negative, "
+            f"got {config.inter_chunk_interp_num}"
+        )
     client = server_client.PolicyClient(
         host=config.host,
         port=config.port,
@@ -439,7 +593,8 @@ if __name__ == "__main__":
     camera_grabber.start()
     hand_subscriber = MocapUEHandSubscriber()
     hand_publisher = MocapUEHandPublisher()
-    body_publisher = MocapUE5G115MsgPublisher(mocap_cfg, fps)
+    body_publisher = MocapUE5G115MsgPublisher(config.mocap_cfg, config.send_fps)
+    send_rate = RateLimiter(frequency=config.send_fps)
 
     while True:
         root_pose = body_pose.get_root_pose()
@@ -503,7 +658,6 @@ if __name__ == "__main__":
         root_rel_cum = None
         last_action = None
         last_hand_action = None
-        global_state_sample_every = 0
         for idx in range(config.roll_out):
 
             frame = camera_grabber.get_frames()
@@ -515,53 +669,59 @@ if __name__ == "__main__":
                 frame=frame,
             )
 
-            action_chunk_rel = client.get_action(observation)[0]["mocap"][0]
+            action_chunk_rel = np.asarray(
+                client.get_action(observation)[0]["mocap"][0],
+                dtype=np.float32,
+            ).reshape(-1, 114)
+            action_exec_size = get_action_exec_size(
+                action_chunk_rel.shape[0],
+                config.action_chunk_size,
+            )
+            action_chunk_rel = action_chunk_rel[:action_exec_size]
             # ret = client.get_action(observation)[0]
             # action_chunk_rel = np.concatenate((ret["root_delta"][0], ret["mocap_xyz"][0], ret["mocap_rot6d"][0]), axis=-1).reshape(-1)
             action_chunk_abs, root_rel_cum, action_hand = model_action_to_abs_action(
                 action_chunk_rel, root_pose, root_rel_cum
             )
 
-            if last_action is not None and last_hand_action is not None:
-                action_chunk_abs = np.concatenate(
-                    (last_action, action_chunk_abs), axis=0
-                )
-                action_chunk_abs = smooth_pose7_quat_sign(action_chunk_abs)
-                action_hand = np.concatenate([last_hand_action, action_hand], axis=0)
-                
-            if config.use_interpolate:
-                action_chunk_abs = interpolate_pose7(
-                    action_chunk_abs[:30], config.num_interp
-                )
-                action_hand = interpolate_hand_joint(action_hand[:30], config.num_interp)
-
-            if last_action is not None:
-                action_chunk_abs = action_chunk_abs[1:]
-                action_hand = action_hand[1:]
+            action_chunk_abs, action_hand, history_sample_mask = build_action_frames(
+                last_action,
+                last_hand_action,
+                action_chunk_abs,
+                action_hand,
+                config.use_interpolate,
+                config.intra_chunk_interp_num,
+                config.inter_chunk_interp_num,
+            )
 
             if action_chunk_abs.shape[0] != action_hand.shape[0]:
                 raise ValueError(
                     "Mocap and hand action lengths do not match: "
                     f"{action_chunk_abs.shape[0]} vs {action_hand.shape[0]}"
                 )
+            if action_chunk_abs.shape[0] != history_sample_mask.shape[0]:
+                raise ValueError(
+                    "Action frame and history-sample mask lengths do not match: "
+                    f"{action_chunk_abs.shape[0]} vs {history_sample_mask.shape[0]}"
+                )
 
             for t in range(action_chunk_abs.shape[0]):
                 mocap_frame = action_chunk_abs[t]
                 xyz, wxyz = extract_mocap_xyz_and_wxyz(mocap_frame)
-                
+
                 body_publisher.send_msg(xyz=xyz, wxyz=wxyz)
                 hand_publisher.send(action_hand[t])
+                send_rate.sleep()
 
-                global_state_sample_every += 1
-                if global_state_sample_every >= state_sample_every:
+                if history_sample_mask[t]:
                     hist_msg = body_pose.get_msg()
                     hist_hand = hand_subscriber.get_state()
                     if hist_msg is not None and hist_hand is not None:
                         state_history_queue.put(hist_msg, hist_hand)
-                    global_state_sample_every = 0
-   
-            last_action = action_chunk_abs[-1:]
-            last_hand_action = action_hand[-1:]
+
+            # The final frame is always the current chunk's last raw action.
+            last_action = action_chunk_abs[-1].copy()
+            last_hand_action = action_hand[-1].copy()
 
     except KeyboardInterrupt:
         logger.info("Stopped by user.")

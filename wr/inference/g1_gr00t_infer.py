@@ -23,7 +23,7 @@ from data_res.dds import (
 from data_res.log import get_logger
 from data_res.transforms import (compute_absolute, normalize_quaternion, rotation_6d_to_quaternion, interpolate_pose7)
 from data_res.utils import (build_observation_from_msg, get_camera_name, load_mocap_data, SELECT_11_INDICES)
-from wr.data_res.camera_old import VideoCapture
+from data_res.camera import VideoCapture
 from serve_res.gr00t import server_client
 
 logger = get_logger(__name__)

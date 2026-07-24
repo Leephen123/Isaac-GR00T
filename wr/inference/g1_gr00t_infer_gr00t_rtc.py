@@ -16,7 +16,7 @@ root_path = Path(__file__).parent.parent
 sys.path.append(str(root_path))
 sys.path.append(os.getcwd())
 
-from wr.data_res.camera_old import VideoCapture
+from data_res.camera import VideoCapture
 from data_res.dds import (
     MOCAP_NUM_JOINTS,
     MOCAP_POS_DIM,

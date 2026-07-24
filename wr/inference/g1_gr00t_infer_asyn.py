@@ -10,7 +10,7 @@ import numpy as np
 import tyro
 from loop_rate_limiters import RateLimiter
 from PIL import Image
-from wr.data_res.camera_old import VideoCapture
+from data_res.camera import VideoCapture
 from data_res.dds import (
     MOCAP_NUM_JOINTS,
     MOCAP_POS_DIM,

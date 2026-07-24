@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 import numpy as np
 from scipy.spatial.transform import Rotation, Slerp
 
@@ -389,27 +387,6 @@ def mocap_to_root_relative(data: np.ndarray) -> np.ndarray:
     return np.concatenate([root_delta, mocap_data_flat], axis=1)
 
 
-def mocap_to_root_relative_delta(data: np.ndarray) -> np.ndarray:
-    """Convert mocap xyz to root-relative forward deltas.
-
-    The output layout stays identical to :func:`mocap_to_root_relative`, but
-    every joint xyz at index ``t`` is
-    ``root_relative_xyz[t + 1] - root_relative_xyz[t]``. The final xyz delta is
-    zero, matching the existing root-delta boundary convention. Rotations are
-    kept unchanged at their original frame.
-    """
-    converted = mocap_to_root_relative(data)
-    mocap_data = converted[:, 3:].reshape(-1, 15, 9).copy()
-    root_relative_xyz = mocap_data[:, :, :3].copy()
-
-    mocap_data[:, :, :3] = 0.0
-    if len(mocap_data) > 1:
-        mocap_data[:-1, :, :3] = root_relative_xyz[1:] - root_relative_xyz[:-1]
-
-    converted[:, 3:] = mocap_data.reshape(len(mocap_data), -1)
-    return converted
-
-
 def restore_mocap_from_root_relative(
     mocap_root_rel: np.ndarray,
     init_root_xyz: np.ndarray | None = None,
@@ -456,76 +433,3 @@ def restore_mocap_from_root_relative(
 
     mocap_data[:, :, :3] = mocap_data[:, :, :3] + root_xyz[:, None, :]
     return mocap_data, next_init_root_xyz
-
-
-def restore_mocap_from_root_relative_delta(
-    mocap_root_rel_delta: np.ndarray,
-    init_root_xyz: np.ndarray | None = None,
-    init_joint_relative_xyz: np.ndarray | None = None,
-) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-    """Restore root and joint-relative XYZ *deltas* to absolute mocap poses.
-
-    The input layout is ``[root_delta_xyz(3), flattened 11 x 9 mocap]``.  The
-    XYZ of each mocap point is a frame-to-frame delta in the root frame; its
-    6D rotation remains an absolute rotation representation.  Consequently,
-    this is the inverse of :func:`mocap_to_root_relative_delta` after the
-    dataset has selected its 11 retained points.
-
-    The delta at step ``t`` moves the pose from step ``t`` to ``t + 1``.  This
-    follows the existing root-delta convention: the first restored frame uses
-    the supplied initial pose and the final delta only determines the next
-    chunk's initial state.
-    """
-    mocap_root_rel_delta = np.asarray(mocap_root_rel_delta)
-    if mocap_root_rel_delta.ndim != 2 or mocap_root_rel_delta.shape[1] != 102:
-        raise ValueError(
-            "Expected mocap_root_rel_delta shape (T, 102), got "
-            f"{mocap_root_rel_delta.shape}"
-        )
-
-    dtype = mocap_root_rel_delta.dtype
-    if init_root_xyz is None:
-        init_root_xyz = np.zeros(3, dtype=dtype)
-    else:
-        init_root_xyz = np.asarray(init_root_xyz, dtype=dtype)
-        if init_root_xyz.shape != (3,):
-            raise ValueError(f"Expected init_root_xyz shape (3,), got {init_root_xyz.shape}")
-
-    if init_joint_relative_xyz is None:
-        init_joint_relative_xyz = np.zeros((11, 3), dtype=dtype)
-    else:
-        init_joint_relative_xyz = np.asarray(init_joint_relative_xyz, dtype=dtype)
-        if init_joint_relative_xyz.shape != (11, 3):
-            raise ValueError(
-                "Expected init_joint_relative_xyz shape (11, 3), got "
-                f"{init_joint_relative_xyz.shape}"
-            )
-
-    root_delta = mocap_root_rel_delta[:, :3]
-    mocap_data = mocap_root_rel_delta[:, 3:].reshape(-1, 11, 9).copy()
-    # Keep the original deltas for the continuation state below.  ``mocap_data``
-    # is overwritten with absolute XYZ before returning, so a view here would
-    # otherwise be silently changed to absolute positions.
-    joint_relative_delta = mocap_data[:, :, :3].copy()
-    num_frames = mocap_root_rel_delta.shape[0]
-
-    root_xyz = np.zeros((num_frames, 3), dtype=dtype)
-    joint_relative_xyz = np.zeros((num_frames, 11, 3), dtype=dtype)
-    if num_frames > 0:
-        root_xyz[0] = init_root_xyz
-        joint_relative_xyz[0] = init_joint_relative_xyz
-    if num_frames > 1:
-        root_xyz[1:] = init_root_xyz[None, :] + np.cumsum(root_delta[:-1], axis=0)
-        joint_relative_xyz[1:] = (
-            init_joint_relative_xyz[None, :, :]
-            + np.cumsum(joint_relative_delta[:-1], axis=0)
-        )
-
-    mocap_data[:, :, :3] = joint_relative_xyz + root_xyz[:, None, :]
-    next_root_xyz = root_xyz[-1] + root_delta[-1] if num_frames else init_root_xyz.copy()
-    next_joint_relative_xyz = (
-        joint_relative_xyz[-1] + joint_relative_delta[-1]
-        if num_frames
-        else init_joint_relative_xyz.copy()
-    )
-    return mocap_data, next_root_xyz, next_joint_relative_xyz

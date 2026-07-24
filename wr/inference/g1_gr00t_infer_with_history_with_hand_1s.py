@@ -11,7 +11,7 @@ import tyro
 from loop_rate_limiters import RateLimiter
 from PIL import Image, ImageDraw, ImageFont
 sys.path.append("/home/unitree/liyifan/wr/")
-from wr.data_res.camera_old import VideoCapture, CameraGrabber
+from data_res.camera import VideoCapture
 from data_res.dds import (
     MOCAP_NUM_JOINTS,
     MOCAP_POS_DIM,
@@ -49,10 +49,10 @@ logger = get_logger(__name__)
 @dataclass
 class ClientConfig:
     host: str = "192.168.123.165"
-    port: int = 9003
+    port: int = 9002
     timeout_ms: int = 15000  # 15s
     task_description: str = (
-        "pick up the cube and bottle into the bowl"
+        "pick up the water to bowl and kitchen sink"
     )
     replay_data_path: Path = Path(
         "/home/mpz/wr_folder/0529/wr/data/ori/test2/data_root_relative_6D.json"
@@ -60,10 +60,10 @@ class ClientConfig:
     model_step_fps: float = 50.0
     camera_fps: float = 20.0
     image_history_indices: tuple[int, ...] = (-20, -10, 0)
-    send_fps: float = 50
+    send_fps: float = 70.0
     history_len: int = 50
-    action_chunk_size: int = 30
-    num_interp: int = 1
+    action_chunk_size: int = 50
+    num_interp: int = 2
     use_interpolate: bool = False
     roll_out: int = 5000
     mocap_cfg: MocapConfig = field(
@@ -360,7 +360,7 @@ def model_action_to_abs_action(
     action_output = np.asarray(action_output, dtype=np.float32)
     logger.info("action output shape: %s", action_output.shape)
 
-    action_with_root_delta = action_output
+    action_with_root_delta = action_output.reshape(-1, 114)
     root_delta = action_with_root_delta[:, :3]
     action_without_root_delta = action_with_root_delta[:, 3:102]
     action_hand = action_with_root_delta[:, 102:]
@@ -435,8 +435,6 @@ if __name__ == "__main__":
     config = tyro.cli(ClientConfig)
     if config.num_interp < 0:
         raise ValueError(f"num_interp must be non-negative, got {config.num_interp}")
-    if config.send_fps <= 0:
-        raise ValueError(f"send_fps must be positive, got {config.send_fps}")
     if config.model_step_fps <= 0:
         raise ValueError(f"model_step_fps must be positive, got {config.model_step_fps}")
     if config.camera_fps <= 0:
@@ -459,24 +457,21 @@ if __name__ == "__main__":
         sys.exit(1)
 
     body_pose = BodyPoseSubscriberV3(config.body_pose_cfg)
+    mocap_queue = MocapDataQueue(maxlen=300)
     state_history_queue = StateHistoryQueue(maxlen=config.history_len)
     image_history_queue = ImageHistoryQueue(config.image_history_indices)
     print("[INFO] init camera")
     camera_name_list = get_camera_name(config.camera_config)
     camera_caps = {name: VideoCapture(name) for name in camera_name_list}
-    camera_grabber = CameraGrabber(camera_caps)
-    camera_grabber.start()
-    camera_grabber.wait_until_ready()
+    sleep(2)
 
     hand_subscriber = MocapUEHandSubscriber()
     hand_publisher = MocapUEHandPublisher()
-    body_publisher = MocapUE5G115MsgPublisher(config.mocap_cfg, config.send_fps)
-    send_rate = RateLimiter(frequency=config.send_fps)
     
     initial_body_pose_msg = wait_for_body_pose_msg(body_pose)
     initial_hand_state = wait_for_hand_state_msg(hand_subscriber)
     state_history_queue.put(initial_body_pose_msg, initial_hand_state)
-    image_history_queue.put(camera_grabber.get_frames())
+    image_history_queue.put(read_camera_frames(camera_caps, flush_count=5))
     while True:
         root_pose = body_pose.get_root_pose()
         if root_pose is not None:
@@ -484,6 +479,14 @@ if __name__ == "__main__":
             break
         sleep(0.01)
     root_pose[2] = 1.0
+
+    sender_thread = MocapSenderThread(
+        mocap_queue=mocap_queue,
+        fps=config.send_fps,
+        mocap_cfg=config.mocap_cfg,
+    )
+    sender_thread.start()
+    logger.info("MocapSender thread started.")
 
     try:
         root_rel_cum = None
@@ -493,6 +496,12 @@ if __name__ == "__main__":
         image_sample_acc = 0.0
         image_sample_ratio = config.camera_fps / config.model_step_fps
         for idx in range(config.roll_out):
+            while not mocap_queue.empty():
+                if not sender_thread.running:
+                    raise RuntimeError("Mocap sender thread stopped unexpectedly")
+                sleep(0.01)
+            if not sender_thread.running:
+                raise RuntimeError("Mocap sender thread stopped unexpectedly")
 
             state_history = state_history_queue.get_all()
             frame_history = image_history_queue.get()
@@ -501,7 +510,7 @@ if __name__ == "__main__":
                 config.task_description,
                 frame_history=frame_history,
             )
-            action_chunk_rel = client.get_action(observation)[0]["mocap"][0].reshape(-1, 114)[:config.action_chunk_size]
+            action_chunk_rel = client.get_action(observation)[0]["mocap"][0]
             # ret = client.get_action(observation)[0]
             # action_chunk_rel = np.concatenate((ret["root_delta"][0], ret["mocap_xyz"][0], ret["mocap_rot6d"][0]), axis=-1).reshape(-1)
             action_chunk_abs, root_rel_cum, action_hand = model_action_to_abs_action(
@@ -534,12 +543,16 @@ if __name__ == "__main__":
             for t in range(action_chunk_abs.shape[0]):
                 mocap_frame = action_chunk_abs[t]
                 xyz, wxyz = extract_mocap_xyz_and_wxyz(mocap_frame)
-
-                body_publisher.send_msg(xyz=xyz, wxyz=wxyz)
-                hand_publisher.send(action_hand[t])
-                send_rate.sleep()
-
+                mocap_queue.put(xyz, wxyz)
                 global_state_sample_every += 1
+
+                while not mocap_queue.empty():
+                    if not sender_thread.running:
+                        raise RuntimeError("Mocap sender thread stopped unexpectedly")
+                    sleep(0.01)
+
+                hand_publisher.send(action_hand[t])
+
                 if global_state_sample_every >= state_sample_every:
                     hist_msg = body_pose.get_msg()
                     hist_hand = hand_subscriber.get_state()
@@ -547,17 +560,26 @@ if __name__ == "__main__":
                         state_history_queue.put(hist_msg, hist_hand)
                     image_sample_acc += image_sample_ratio
                     if image_sample_acc >= 1.0:
-                        image_history_queue.put(camera_grabber.get_frames())
+                        image_history_queue.put(
+                            read_camera_frames(camera_caps, flush_count=1)
+                        )
                         image_sample_acc -= 1.0
                     global_state_sample_every = 0
 
             last_action = action_chunk_abs[-1:]
             last_hand_action = action_hand[-1:]
 
+        while not mocap_queue.empty():
+            if not sender_thread.running:
+                raise RuntimeError("Mocap sender thread stopped unexpectedly")
+            sleep(0.01)
+        if not sender_thread.running:
+            raise RuntimeError("Mocap sender thread stopped unexpectedly")
     except KeyboardInterrupt:
         logger.info("Stopped by user.")
     finally:
-        camera_grabber.stop()
+        sender_thread.stop()
+        sender_thread.join(timeout=2.0)
         for camera_cap in camera_caps.values():
             camera_cap.release()
         logger.info("Sender thread stopped.")

@@ -46,7 +46,7 @@ from data_res.utils import (
     load_mocap_data,
     SELECT_11_INDICES,
 )
-from wr.data_res.camera_old import VideoCapture
+from data_res.camera import VideoCapture
 
 
 gr00t_path = root_path / "serve_res/mpz/"
