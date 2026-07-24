@@ -91,8 +91,6 @@ _PROJECTOR_INDEX_GROUPS: dict[int, set[str]] = {
     },
     12: {
         "unitree_g1_29dof",
-    },
-    13: {
         "unitree_g1_29dof_hand",
     },
     # XDOF base + subtask refinement use the pretrained projector slot.
