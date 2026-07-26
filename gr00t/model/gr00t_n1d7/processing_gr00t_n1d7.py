@@ -40,7 +40,9 @@ from gr00t.data.state_action.state_action_processor import StateActionProcessor
 from gr00t.data.utils import parse_modality_configs, to_json_serializable
 
 from .image_augmentations import (
+    apply_head_camera_degradation,
     apply_with_replay,
+    build_head_camera_degradation_transform,
     build_image_transformations,
     build_image_transformations_albumentations,
 )
@@ -231,6 +233,8 @@ class Gr00tN1d7Processor(BaseProcessor):
         crop_fraction: float = 0.95,
         random_rotation_angle: int | None = None,
         color_jitter_params: dict[str, float] | None = None,
+        head_camera_degradation: bool = False,
+        head_camera_degradation_prob: float = 0.2,
         formalize_language: bool = True,
         model_name: str = "nvidia/Cosmos-Reason2-2B",
         model_type: str = "qwen",
@@ -324,6 +328,10 @@ class Gr00tN1d7Processor(BaseProcessor):
         self.image_target_size = image_target_size
         self.random_rotation_angle = random_rotation_angle
         self.color_jitter_params = color_jitter_params
+        self.head_camera_degradation = head_camera_degradation
+        self.head_camera_degradation_prob = head_camera_degradation_prob
+        if not 0.0 <= self.head_camera_degradation_prob <= 1.0:
+            raise ValueError("head_camera_degradation_prob must be in [0, 1]")
         self.processor = build_processor(model_name, transformers_loading_kwargs)
         # Set padding side to 'left' for Flash Attention compatibility
         self.processor.tokenizer.padding_side = "left"
@@ -340,6 +348,13 @@ class Gr00tN1d7Processor(BaseProcessor):
 
         # Choose between torchvision and albumentations transforms
         self.use_albumentations = use_albumentations
+        if self.head_camera_degradation and not self.use_albumentations:
+            raise ValueError("head_camera_degradation requires use_albumentations=True")
+        self.head_camera_degradation_transform = (
+            build_head_camera_degradation_transform(self.head_camera_degradation_prob)
+            if self.head_camera_degradation
+            else None
+        )
         if use_albumentations:
             self.train_image_transform, self.eval_image_transform = (
                 build_image_transformations_albumentations(
@@ -911,6 +926,12 @@ class Gr00tN1d7Processor(BaseProcessor):
                 transformed_images, replay = apply_with_replay(
                     image_transform, view_images, view_masks, replay
                 )
+                transformed_images = apply_head_camera_degradation(
+                    view=view,
+                    images=transformed_images,
+                    transform=self.head_camera_degradation_transform,
+                    enabled=self.training,
+                )
                 temporal_stacked_images[view] = torch.stack(transformed_images)  # (T, C, H, W)
         else:
             if masks is not None:
@@ -957,6 +978,8 @@ class Gr00tN1d7Processor(BaseProcessor):
                 "use_albumentations": self.use_albumentations,
                 "random_rotation_angle": self.random_rotation_angle,
                 "color_jitter_params": self.color_jitter_params,
+                "head_camera_degradation": self.head_camera_degradation,
+                "head_camera_degradation_prob": self.head_camera_degradation_prob,
                 "shortest_image_edge": self.shortest_image_edge,
                 "crop_fraction": self.crop_fraction,
                 "letter_box_transform": self.letter_box_transform,
@@ -1066,6 +1089,8 @@ class Gr00tN1d7Processor(BaseProcessor):
             override_keys = [
                 "random_rotation_angle",
                 "color_jitter_params",
+                "head_camera_degradation",
+                "head_camera_degradation_prob",
                 "use_relative_action",
                 "exclude_state",
                 "state_dropout_prob",

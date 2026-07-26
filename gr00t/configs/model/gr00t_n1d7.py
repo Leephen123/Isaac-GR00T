@@ -59,6 +59,8 @@ class Gr00tN1d7Config(PretrainedConfig):
 
     random_rotation_angle: int | None = None
     color_jitter_params: dict[str, float] | None = None
+    head_camera_degradation: bool = False
+    head_camera_degradation_prob: float = 0.2
     use_albumentations_transforms: bool = True
     letter_box_transform: bool = False
     # Extra augmentation config (mask-based and others).
@@ -160,6 +162,8 @@ class Gr00tN1d7Config(PretrainedConfig):
             exclude_keys = {
                 "random_rotation_angle",
                 "color_jitter_params",
+                "head_camera_degradation",
+                "head_camera_degradation_prob",
                 "use_albumentations_transforms",
                 "formalize_language",
                 "image_crop_size",

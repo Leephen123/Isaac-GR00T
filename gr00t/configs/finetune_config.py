@@ -143,6 +143,12 @@ class FinetuneConfig:
     If None, applying the default color jitter augmentation from the pretrained model.
     """
 
+    head_camera_degradation: bool = False
+    """If True, apply one light, mutually exclusive degradation to ``ego_view`` only."""
+
+    head_camera_degradation_prob: float = 0.2
+    """Total probability of head-camera Gaussian noise/blur or motion blur augmentation."""
+
     use_percentiles: bool = True
     """
     If True, use q01/q99 percentile statistics for state/action min-max normalization.

@@ -217,6 +217,8 @@ if __name__ == "__main__":
     config.model.history_shift_protect_last = ft_config.history_shift_protect_last
     config.model.random_rotation_angle = ft_config.random_rotation_angle
     config.model.color_jitter_params = ft_config.color_jitter_params
+    config.model.head_camera_degradation = ft_config.head_camera_degradation
+    config.model.head_camera_degradation_prob = ft_config.head_camera_degradation_prob
     config.model.use_percentiles = ft_config.use_percentiles
     if (ft_config.shortest_image_edge is None) != (ft_config.crop_fraction is None):
         raise ValueError("shortest_image_edge and crop_fraction must be set together")

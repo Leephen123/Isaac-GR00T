@@ -19,6 +19,7 @@ import warnings
 import albumentations as A
 import cv2
 import numpy as np
+from PIL import Image
 import torch
 import torchvision.transforms.v2 as transforms
 
@@ -93,6 +94,57 @@ def apply_with_replay(transform, images, masks=None, replay=None):
         transformed_tensors.append(img_tensor)
 
     return transformed_tensors, current_replay
+
+
+def build_head_camera_degradation_transform(probability: float) -> A.ReplayCompose:
+    """Build mutually exclusive light degradations for the head camera.
+
+    The relative weights yield 5% Gaussian noise, 5% Gaussian blur and 10%
+    motion blur when ``probability`` is 0.2. ReplayCompose keeps the selected
+    degradation consistent if a view contains multiple temporal frames.
+    """
+    if not 0.0 <= probability <= 1.0:
+        raise ValueError("head_camera_degradation_prob must be in [0, 1]")
+
+    return A.ReplayCompose(
+        [
+            A.OneOf(
+                [
+                    A.GaussNoise(
+                        var_limit=(5.0, 20.0),
+                        mean=0,
+                        per_channel=True,
+                        p=0.25,
+                    ),
+                    A.GaussianBlur(
+                        blur_limit=(3, 5),
+                        sigma_limit=(0.1, 1.0),
+                        p=0.25,
+                    ),
+                    A.MotionBlur(blur_limit=(3, 5), p=0.5),
+                ],
+                p=probability,
+            )
+        ],
+        p=1.0,
+    )
+
+
+def apply_head_camera_degradation(
+    view: str,
+    images: list[torch.Tensor],
+    transform: A.ReplayCompose | None,
+    enabled: bool,
+) -> list[torch.Tensor]:
+    """Apply the optional post-resize degradation to the head camera only."""
+    if not enabled or view != "ego_view" or transform is None:
+        return images
+
+    pil_images = [
+        Image.fromarray(image.permute(1, 2, 0).contiguous().cpu().numpy()) for image in images
+    ]
+    degraded_images, _ = apply_with_replay(transform, pil_images)
+    return degraded_images
 
 
 class MaskedColorTransform(A.ImageOnlyTransform):

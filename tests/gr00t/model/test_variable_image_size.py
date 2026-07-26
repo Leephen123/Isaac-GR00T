@@ -17,15 +17,19 @@
 
 from pathlib import Path
 
-from gr00t.model.gr00t_n1d7.image_augmentations import (
-    apply_with_replay,
-    build_image_transformations,
-    build_image_transformations_albumentations,
-)
+import albumentations as A
 import numpy as np
 from PIL import Image
 import pytest
 import torch
+
+from gr00t.model.gr00t_n1d7.image_augmentations import (
+    apply_head_camera_degradation,
+    apply_with_replay,
+    build_head_camera_degradation_transform,
+    build_image_transformations,
+    build_image_transformations_albumentations,
+)
 
 
 FIXTURE_DIR = Path(__file__).parent.parent.parent / "fixtures" / "processor_config"
@@ -221,6 +225,45 @@ class TestAlbumentationsTransforms:
         out_sq = self._apply(img_square)
         out_wide = self._apply(img_wide)
         assert out_sq.shape != out_wide.shape
+
+
+class TestHeadCameraDegradation:
+    def test_builds_one_mutually_exclusive_degradation_group(self):
+        transform = build_head_camera_degradation_transform(0.2)
+        one_of = transform.transforms[0]
+
+        assert type(one_of).__name__ == "OneOf"
+        assert one_of.p == pytest.approx(0.2)
+        assert [type(candidate).__name__ for candidate in one_of.transforms] == [
+            "GaussNoise",
+            "GaussianBlur",
+            "MotionBlur",
+        ]
+        assert [candidate.p for candidate in one_of.transforms] == pytest.approx(
+            [0.25, 0.25, 0.5]
+        )
+
+    @pytest.mark.parametrize("probability", [-0.01, 1.01])
+    def test_rejects_invalid_probability(self, probability):
+        with pytest.raises(ValueError, match="must be in"):
+            build_head_camera_degradation_transform(probability)
+
+    @pytest.mark.parametrize("view,enabled", [("left_wrist_view", True), ("ego_view", False)])
+    def test_skips_wrist_views_and_eval_mode(self, view, enabled):
+        images = [torch.zeros((3, 8, 8), dtype=torch.uint8)]
+        invert = A.ReplayCompose([A.InvertImg(p=1.0)])
+
+        result = apply_head_camera_degradation(view, images, invert, enabled)
+
+        assert result is images
+
+    def test_applies_to_enabled_ego_view(self):
+        images = [torch.zeros((3, 8, 8), dtype=torch.uint8)]
+        invert = A.ReplayCompose([A.InvertImg(p=1.0)])
+
+        result = apply_head_camera_degradation("ego_view", images, invert, True)
+
+        assert torch.all(result[0] == 255)
 
 
 # ---- Processor-level tests (using fixture config, no checkpoint needed) ----
