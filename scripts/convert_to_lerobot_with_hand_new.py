@@ -13,7 +13,7 @@ import sys
 sys.path.append("/liujinxin/liyifan/Isaac-GR00T/third_party/lerobot-main")
 from lerobot.common.datasets.lerobot_dataset import LeRobotDataset
 
-SOURCE_JSON_NAME = "data_all_points_relative_6D.json"
+SOURCE_JSON_NAME = "data_root_relative_6D.json"
 OUTPUT_JSON_NAME = "data_root_relative_6D_window_cont.json"
 IMAGE_FILE_SUFFIXES = frozenset({".bmp", ".jpeg", ".jpg", ".png", ".webp"})
 

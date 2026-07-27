@@ -273,26 +273,24 @@ class Gr00tN1d7ActionHead(nn.Module):
     def _add_action_position_embedding(
         self, action_features: torch.Tensor
     ) -> torch.Tensor:
-        """Add temporal positions without treating hand tokens as later timesteps."""
         if not self.config.add_pos_embed:
             return action_features
 
         sequence_length = action_features.shape[1]
-        if self.use_separate_hand_head:
-            if sequence_length % 2 != 0:
-                raise ValueError(
-                    "Split body/hand action features must contain two equal token streams, "
-                    f"got sequence length {sequence_length}"
-                )
-            horizon = sequence_length // 2
-            # Token layout is [body_0..body_H-1, hand_0..hand_H-1].
-            # Both streams represent the same H temporal positions.
-            pos_ids = torch.arange(horizon, dtype=torch.long, device=action_features.device)
-            pos_ids = pos_ids.repeat(2)
-        else:
-            pos_ids = torch.arange(
-                sequence_length, dtype=torch.long, device=action_features.device
+        if self.use_separate_hand_head and sequence_length % 2 != 0:
+            raise ValueError(
+                "Split body/hand action features must contain two equal token streams, "
+                f"got sequence length {sequence_length}"
             )
+
+        # Layout:
+        # body_0 ... body_H-1, hand_0 ... hand_H-1
+        # Use distinct positions for the two token streams.
+        pos_ids = torch.arange(
+            sequence_length,
+            dtype=torch.long,
+            device=action_features.device,
+        )
 
         pos_embs = self.position_embedding(pos_ids).unsqueeze(0)
         return action_features + pos_embs
